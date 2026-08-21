@@ -1,0 +1,8 @@
+node_modules/
+coverage/
+.rb/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.log
+.DS_Store

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+resolve_real_path() {
+  local source="$1" directory target
+  while [ -L "$source" ]; do
+    directory="$(cd -P "$(dirname "$source")" && pwd)"
+    target="$(readlink "$source")"
+    if [[ "$target" == /* ]]; then source="$target"; else source="$directory/$target"; fi
+  done
+  directory="$(cd -P "$(dirname "$source")" && pwd)"
+  printf '%s/%s\n' "$directory" "$(basename "$source")"
+}
+
+SCRIPT_PATH="$(resolve_real_path "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+RB_RALPH_HOME="${RB_RALPH_HOME:-$(cd "$SCRIPT_DIR/.." && pwd -P)}"
+exec node "$RB_RALPH_HOME/lib/dashboard.cjs" "$@"
