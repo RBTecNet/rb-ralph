@@ -196,7 +196,7 @@ Options:
   --rate-limit-wait <n>  Fallback wait in seconds (default: 60)
   --max-limit-waits <n>  Maximum provider-limit waits per phase (default: 20)
   --max-limit-wait <n>   Cap one provider-requested wait (default: 3600 seconds)
-  --isolation <mode>     shared or worktree (default: shared)
+  --isolation <mode>     shared or worktree; parallel execution requires worktree
   --memory-url <url>     Optional RB Memory Streamable HTTP MCP URL
   --memory-mode <mode>   off, required, or best-effort (default: required with URL)
   --memory-token-env <n> Bearer-token environment variable (default: RB_MEMORY_TOKEN)
@@ -943,8 +943,9 @@ cleanup_runtime() {
 integrate_worktree_changes() {
   local snapshot="$1" temp_root="$2" patch_dir="$3"
   shift 3
-  local task_id task_root task_patch integration combined changed
+  local task_id task_root task_patch integration combined changed changed_path task_overlap
   local integration_failed=0
+  local -A changed_path_owner=()
   mkdir -p "$patch_dir"
   integration="$temp_root/integration"
   create_execution_worktree "$snapshot" "$integration"
@@ -960,9 +961,22 @@ integrate_worktree_changes() {
       integration_failed=1
       continue
     fi
+    task_overlap=0
+    while IFS= read -r changed_path; do
+      [ -n "$changed_path" ] || continue
+      if [ -n "${changed_path_owner[$changed_path]:-}" ]; then
+        printf 'Tasks %s and %s both modify %s; parallel path overlap is prohibited.\n' \
+          "${changed_path_owner[$changed_path]}" "$task_id" "$changed_path" >> "$AGENT_LOG"
+        integration_failed=1
+        task_overlap=1
+      else
+        changed_path_owner["$changed_path"]="$task_id"
+      fi
+    done <<< "$changed"
     task_patch="$patch_dir/$task_id.patch"
     git -C "$task_root" diff --binary "$snapshot" > "$task_patch"
     [ -s "$task_patch" ] || continue
+    [ "$task_overlap" -eq 0 ] || continue
     if ! git -C "$integration" apply --check "$task_patch" || ! git -C "$integration" apply "$task_patch"; then
       printf 'Task %s patch conflicts during isolated integration.\n' "$task_id" >> "$AGENT_LOG"
       integration_failed=1
@@ -1574,6 +1588,9 @@ while IFS= read -r tsv_row; do
   use_parallel=0
   if [ "$PARALLEL_LIMIT" -gt 1 ] && [ "${#PENDING_TASK_IDS[@]}" -gt 1 ] && [ "$all_pending_parallel" -eq 1 ]; then
     use_parallel=1
+  fi
+  if [ "$use_parallel" -eq 1 ] && [ "$ISOLATION" != "worktree" ]; then
+    die "$phase_id has parallel-safe tasks, but parallel execution requires --isolation worktree to prevent agent interference"
   fi
   completed=0
   attempt="$(next_phase_attempt "$phase_id")"

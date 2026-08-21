@@ -303,14 +303,14 @@ Codex caches or from the monorepo's internal layout participates in discovery.
   marked parallel-safe and no selected task depends on another.
 - Gives each parallel agent only its task plus phase context, reducing repeated
   prompt content and preventing sibling-task scope leakage.
-- Can isolate concurrent task agents in detached Git worktrees created from one
+- Isolates concurrent task agents in detached Git worktrees created from one
   immutable snapshot, then check and combine their patches before changing the
   primary working tree.
 - Preserves pre-existing tracked and non-ignored untracked local changes in the
   execution snapshot without staging, stashing, or committing the current
   branch.
-- Fails closed on conflicting isolated patches and retains the task patches as
-  run evidence.
+- Fails closed when sibling patches touch the same path or otherwise conflict,
+  and retains the task patches as run evidence.
 - Rejects prompts above a configurable byte bound before starting a provider.
 - Publishes a live terminal dashboard and normalized per-call token/cost
   telemetry without making telemetry a completion gate.
@@ -545,9 +545,9 @@ bin/rb-ralph \
 
 Parallelism is conservative. If any pending task has `Parallel safe: false` or
 depends on another pending task in the phase, RB Ralph automatically uses one
-sequential phase agent. The default isolation mode is `shared`; use
-`--isolation worktree` to isolate concurrent task agents. Worktree isolation
-requires a Git repository with an initial commit.
+sequential phase agent. Parallel execution requires `--isolation worktree`; a
+shared working tree is rejected before an implementation provider starts.
+Worktree isolation requires a Git repository with an initial commit.
 
 The isolated snapshot includes committed files, tracked local changes, and
 non-ignored untracked files. Git-ignored dependencies and build outputs are not
@@ -555,8 +555,9 @@ copied into detached worktrees. Each task produces a binary patch; RB Ralph
 applies the patches first to a separate integration worktree and only applies
 the combined patch to the primary tree when all checks succeed. Changes under
 `.rb/` are rejected because documentation and run evidence belong to the run
-manager. A conflict leaves the primary tree unchanged and stores individual
-patches under the active run's `patches/` directory.
+manager. Patches that touch the same path are rejected even when their hunks
+would merge cleanly. Any overlap or conflict leaves the primary tree unchanged
+and stores individual patches under the active run's `patches/` directory.
 
 Use Claude Code for both roles:
 
@@ -854,6 +855,7 @@ Run the portable runner contract suite from the workspace root:
 
 ```bash
 bash tests/test-portability-and-contract.sh
+bash tests/test-execution-parallelism.sh
 ```
 
 It covers real and symlink launchers, temporary installation, spaces in paths,
@@ -861,7 +863,9 @@ all core discovery levels, executor/manager resolution, TSV empty fields,
 evidence, fail-closed gates, inspection without run state, structured provider
 telemetry, configured pricing, dashboard snapshots, progress beyond three
 attempts, no-progress interruption, isolated manager retries, hard caps, and
-durable resume feedback.
+durable resume feedback. The parallelism suite additionally proves bounded task
+concurrency, mandatory worktree isolation, primary-tree atomicity, ordinary Git
+conflict handling, and rejection of same-path sibling patches.
 
 ## Deliberate first-version limits
 

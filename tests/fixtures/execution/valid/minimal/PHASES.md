@@ -19,7 +19,7 @@
   - **Depends on:** none
   - **Parallel safe:** false
   - **Acceptance criteria:**
-    - AC-T001-01: The foundation exposes the behavior required by RF-001.
+    - AC-T001-01: Running the version command exits with code 0 and prints `0.1.0`.
   - **Validation:**
     - `npm test`
   - **Expected evidence:** Source changes, regression tests, and passing validation output.
