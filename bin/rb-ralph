@@ -27,6 +27,7 @@ USAGE_HELPER="$RB_RALPH_HOME/lib/usage-summary.cjs"
 PROCESS_SUPERVISOR="$RB_RALPH_HOME/lib/process-supervisor.cjs"
 OPERATIONAL_VERIFIER="$RB_RALPH_HOME/lib/operational-verifier.cjs"
 CONTROL_PLANE_HELPER="$RB_RALPH_HOME/lib/control-plane.cjs"
+SPLASH_HELPER="$RB_RALPH_HOME/lib/splash.cjs"
 DASHBOARD_CLI="$RB_RALPH_HOME/bin/rb-ralph-watch"
 CORE_CLI_OPTION=""
 CORE_CLI_ENV="${RB_RALPH_CORE_CLI:-}"
@@ -88,6 +89,7 @@ MEMORY_MODE="${RB_RALPH_MEMORY_MODE:-}"
 MEMORY_TOKEN_ENV="${RB_RALPH_MEMORY_TOKEN_ENV:-RB_MEMORY_TOKEN}"
 PRICING_FILE="${RB_RALPH_PRICING_FILE:-}"
 FINAL_AUDIT="${RB_RALPH_FINAL_AUDIT:-1}"
+SPLASH="${RB_RALPH_SPLASH:-1}"
 OPERATIONAL_CONTRACT_OPTION=""
 OPERATIONAL_CONTRACT_ENV="${RB_RALPH_OPERATIONAL_CONTRACT:-}"
 OPERATIONAL_CONTRACT=""
@@ -120,13 +122,24 @@ TSV_SEPARATOR=$'\034'
 
 print_brand() {
   cat <<'BRAND'
-█▀█ █▄▄   █▀█ ▄▀█ █░░ █▀█ █░█                    ╭──╮
-█▀▄ █▄█   █▀▄ █▀█ █▄▄ █▀▀ █▀█                 ╭╮ ╰──╯ ╭╮
-     AUTONOMOUS CONTROL PLANE               ╭──╯╰──────╯╰──╮
-                                           /    ●      ●    \
-                                          |        ▰          |
-                                           ╰─────────────────╯  RALPH · capivara de plantão
+█▀█ █▄▄   █▀█ ▄▀█ █░░ █▀█ █░█           ╭─╮          ╭─╮
+█▀▄ █▄█   █▀▄ █▀█ █▄▄ █▀▀ █▀█         ╭─╯ ╰──────────╯ ╰─╮
+     AUTONOMOUS CONTROL PLANE         │     ◕      ◕     │
+                                      ╰──╮  ╭──────╮  ╭──╯
+                                         ╰──┤ ▪  ▪ ├──╯
+                                            ╰──◡◡──╯          RALPH · capivara de plantão
 BRAND
+}
+
+# Cosmetic-only startup animation. Any failure is swallowed so a missing helper,
+# an unusual terminal, or a Ctrl-C never changes how the run itself behaves.
+play_splash() {
+  [ "${RB_RALPH_SPLASH_SHOWN:-0}" != "1" ] || return 0
+  [ -t 1 ] || return 0
+  [ -f "$SPLASH_HELPER" ] || return 0
+  command -v node >/dev/null 2>&1 || return 0
+  RB_RALPH_SPLASH=1 node "$SPLASH_HELPER" --version "$RB_RALPH_VERSION" || true
+  export RB_RALPH_SPLASH_SHOWN=1
 }
 
 usage() {
@@ -209,6 +222,8 @@ Options:
   --no-final-audit       Explicitly skip the final operational acceptance phase
   --yolo                 Bypass provider permissions/sandbox (default)
   --protected            Enable each provider's protected role defaults
+  --splash               Play the launch splash animation and exit
+  --no-splash            Skip the launch splash for this invocation
   --dashboard, --tui     Show the live terminal dashboard during execution
   --watch                Watch the latest run; equivalent to rb-ralph-watch
   --dry-run              Validate and show the selected phase schedule
@@ -232,6 +247,7 @@ Environment equivalents:
   RB_RALPH_ISOLATION, RB_RALPH_MEMORY_MCP_URL, RB_RALPH_MEMORY_MODE,
   RB_RALPH_MEMORY_TOKEN_ENV, RB_RALPH_MEMORY_CLI, RB_RALPH_PRICING_FILE,
   RB_RALPH_FINAL_AUDIT, RB_RALPH_OPERATIONAL_CONTRACT,
+  RB_RALPH_SPLASH (0 or 1), RB_RALPH_SPLASH_MS,
   RB_RALPH_PERMISSION_MODE (yolo or protected; default: yolo)
 
 Provider command protocol:
@@ -1365,6 +1381,14 @@ while [ "$#" -gt 0 ]; do
       CLI_PERMISSION_MODE_SET=1
       shift
       ;;
+    --splash)
+      RB_RALPH_SPLASH_SHOWN=0 play_splash
+      exit 0
+      ;;
+    --no-splash)
+      SPLASH=0
+      shift
+      ;;
     --dashboard|--tui)
       DASHBOARD=1
       shift
@@ -1415,6 +1439,10 @@ case "$FINAL_AUDIT" in
   0|1) ;;
   *) die "RB_RALPH_FINAL_AUDIT must be 0 or 1" ;;
 esac
+case "$SPLASH" in
+  0|1) ;;
+  *) die "RB_RALPH_SPLASH must be 0 or 1" ;;
+esac
 case "$VALIDATION_MODE" in
   run|manager) ;;
   *) die "--validation-mode must be run or manager" ;;
@@ -1439,6 +1467,10 @@ case "$MEMORY_MODE" in
   off|required|best-effort) ;;
   *) die "--memory-mode must be off, required, or best-effort" ;;
 esac
+if [ "$SPLASH" -eq 1 ] && [ "$LIST_ONLY" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
+  play_splash
+fi
+
 if [ "$WATCH_ONLY" -eq 1 ]; then
   [ -d "$PROJECT" ] || die "Project directory does not exist: $PROJECT"
   [ -x "$DASHBOARD_CLI" ] || die "RB Ralph dashboard not found: $DASHBOARD_CLI; reinstall the complete package"

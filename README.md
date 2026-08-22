@@ -119,7 +119,7 @@ Confirm the exact source or installed build at any time with:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.5.0
+# RB Ralph 0.5.1
 ```
 
 The installer prints and copies the same `VERSION` marker, so a source upgrade
@@ -133,6 +133,27 @@ the RB Ralph ASCII wordmark alongside Ralph, the project mascot — a calm
 capybara watching over less-calm agents. Narrow or short terminals
 automatically use the compact one-line brand so gates and evidence retain
 priority over decoration.
+
+Every interactive invocation opens with a short animated splash: the large RB
+Ralph wordmark and Ralph the capybara, cycling green -> purple -> orange for
+about 1.8 seconds. It is drawn on the terminal's alternate screen buffer, so it
+leaves no trace in the scrollback and the run starts on a clean screen. The
+splash is purely cosmetic and never changes execution state; the brand shown
+inside the run itself stays static.
+
+It is skipped automatically whenever it would be noise: non-interactive output
+(pipes, redirects, CI), `--list`, `--dry-run`, `--help`, `--version`,
+`TERM=dumb`, and terminals smaller than 34x16.
+
+```bash
+rb-ralph --splash                             # play it on its own and exit
+rb-ralph --project . --no-splash              # skip it for this invocation
+RB_RALPH_SPLASH=0 rb-ralph --project .        # disable it entirely
+RB_RALPH_SPLASH_MS=800 rb-ralph --project .   # make it shorter
+```
+
+`--splash` is the explicit request, so it plays even when `RB_RALPH_SPLASH=0`
+is set in the environment.
 
 Start a run with its embedded TUI:
 

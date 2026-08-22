@@ -124,6 +124,7 @@ install -m 0755 "$SOURCE_ROOT/lib/control-plane.cjs" "$INSTALL_HOME/lib/control-
 install -m 0755 "$SOURCE_ROOT/lib/provider-telemetry.cjs" "$INSTALL_HOME/lib/provider-telemetry.cjs"
 install -m 0755 "$SOURCE_ROOT/lib/usage-summary.cjs" "$INSTALL_HOME/lib/usage-summary.cjs"
 install -m 0755 "$SOURCE_ROOT/lib/dashboard.cjs" "$INSTALL_HOME/lib/dashboard.cjs"
+install -m 0755 "$SOURCE_ROOT/lib/splash.cjs" "$INSTALL_HOME/lib/splash.cjs"
 install -m 0755 "$SOURCE_ROOT/lib/process-supervisor.cjs" "$INSTALL_HOME/lib/process-supervisor.cjs"
 install -m 0755 "$SOURCE_ROOT/lib/operational-verifier.cjs" "$INSTALL_HOME/lib/operational-verifier.cjs"
 install -m 0644 "$SOURCE_ROOT/pricing.example.json" "$INSTALL_HOME/pricing.example.json"
