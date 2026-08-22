@@ -412,6 +412,20 @@ assert_eq "2" "$(cat "$MOCK_STATE/override-agent.count")" \
   "orchestrator RETRY override does not fail structured finding reconciliation"
 assert_contains "$MOCK_STATE/override-agent-2.prompt" 'implementation agent or isolated integration exited with 1' \
   "orchestrator override reaches the next executor as a fallback finding"
+OVERRIDE_RUN="$(find "$OVERRIDE_PROJECT/.rb/runs" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+OVERRIDE_REPLAY_CUT="$TEMP_ROOT/override-replay-cut"
+mkdir -p "$OVERRIDE_REPLAY_CUT/logs" "$OVERRIDE_REPLAY_CUT/prompts"
+head -n 1 "$OVERRIDE_RUN/findings.tsv" > "$OVERRIDE_REPLAY_CUT/findings.tsv"
+{
+  head -n 1 "$OVERRIDE_RUN/events.tsv"
+  awk -F '\t' '$2 == "P01" && $3 == "1" && $4 == "RETRY" { print }' "$OVERRIDE_RUN/events.tsv"
+} > "$OVERRIDE_REPLAY_CUT/events.tsv"
+cp "$OVERRIDE_RUN/logs/P01-attempt-1-manager-audit.json" "$OVERRIDE_REPLAY_CUT/logs/"
+cp "$OVERRIDE_RUN/prompts/P01-attempt-1-manager.txt" "$OVERRIDE_REPLAY_CUT/prompts/"
+node "$ROOT/lib/manager-audit.cjs" replay "$OVERRIDE_REPLAY_CUT/findings.tsv" \
+  "$OVERRIDE_REPLAY_CUT/logs" "$OVERRIDE_REPLAY_CUT/prompts" >/dev/null
+assert_contains "$OVERRIDE_REPLAY_CUT/findings.tsv" $'\topen\timplementation agent or isolated integration exited with 1;' \
+  "replay obeys the orchestrator RETRY instead of a raw manager COMPLETE"
 
 printf '0\n' > "$MOCK_STATE/agent-count"
 ECHOED_PROTOCOL_PROJECT="$(new_project echoed-protocol-project)"

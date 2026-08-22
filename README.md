@@ -124,7 +124,7 @@ Confirm the exact source or installed build at any time with:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.5.5
+# RB Ralph 0.5.6
 ```
 
 The installer prints and copies the same `VERSION` marker, so a source upgrade
@@ -537,7 +537,9 @@ observed failure and evidence remain current in the executor prompt. The
 If an orchestrator-owned gate converts a manager `COMPLETE` into `RETRY` (for
 example, a nonzero executor exit or deterministic validation failure), Ralph
 records the orchestrator reason as a fallback finding. It does not feed a
-finding-free `COMPLETE` report into the structured RETRY reconciler.
+finding-free `COMPLETE` report into the structured RETRY reconciler. Resume
+replay follows the effective append-only event outcome as well, so the raw
+manager decision cannot close findings from an orchestrator-rejected attempt.
 
 `RETRY` and `BLOCKED` are the other valid decisions. Adapters own CLI-specific
 arguments, models, permissions, authentication, and output normalization, so
