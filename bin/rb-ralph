@@ -26,6 +26,7 @@ TELEMETRY_HELPER="$RB_RALPH_HOME/lib/provider-telemetry.cjs"
 USAGE_HELPER="$RB_RALPH_HOME/lib/usage-summary.cjs"
 PROCESS_SUPERVISOR="$RB_RALPH_HOME/lib/process-supervisor.cjs"
 OPERATIONAL_VERIFIER="$RB_RALPH_HOME/lib/operational-verifier.cjs"
+CONTROL_PLANE_HELPER="$RB_RALPH_HOME/lib/control-plane.cjs"
 DASHBOARD_CLI="$RB_RALPH_HOME/bin/rb-ralph-watch"
 CORE_CLI_OPTION=""
 CORE_CLI_ENV="${RB_RALPH_CORE_CLI:-}"
@@ -69,6 +70,7 @@ MAX_TOTAL_ATTEMPTS="${RB_RALPH_MAX_TOTAL_ATTEMPTS:-12}"
 MAX_STRATEGY_RESETS="${RB_RALPH_MAX_STRATEGY_RESETS:-1}"
 MAX_MANAGER_RETRIES="${RB_RALPH_MAX_MANAGER_RETRIES:-3}"
 MANAGER_RETRY_WAIT="${RB_RALPH_MANAGER_RETRY_WAIT:-5}"
+MAX_INCOMPLETE_RETRIES="${RB_RALPH_MAX_INCOMPLETE_RETRIES:-2}"
 AGENT_TIMEOUT="${RB_RALPH_AGENT_TIMEOUT:-3600}"
 AGENT_IDLE_TIMEOUT="${RB_RALPH_AGENT_IDLE_TIMEOUT:-300}"
 MANAGER_TIMEOUT="${RB_RALPH_MANAGER_TIMEOUT:-900}"
@@ -220,7 +222,8 @@ Environment equivalents:
   RB_RALPH_MODEL, RB_RALPH_AGENT_MODEL, RB_RALPH_MANAGER_MODEL,
   RB_RALPH_MAX_ATTEMPTS, RB_RALPH_MAX_TOTAL_ATTEMPTS,
   RB_RALPH_MAX_STRATEGY_RESETS, RB_RALPH_MAX_MANAGER_RETRIES,
-  RB_RALPH_MANAGER_RETRY_WAIT, RB_RALPH_AGENT_TIMEOUT,
+  RB_RALPH_MANAGER_RETRY_WAIT, RB_RALPH_MAX_INCOMPLETE_RETRIES,
+  RB_RALPH_AGENT_TIMEOUT,
   RB_RALPH_AGENT_IDLE_TIMEOUT, RB_RALPH_MANAGER_TIMEOUT,
   RB_RALPH_MANAGER_IDLE_TIMEOUT, RB_RALPH_VALIDATION_MODE,
   RB_RALPH_VALIDATION_TIMEOUT, RB_RALPH_PARALLEL,
@@ -234,8 +237,10 @@ Environment equivalents:
 Provider command protocol:
   Commands run from the project root, receive the prompt on stdin, and receive
   RB_RALPH_ROLE, RB_RALPH_PROJECT_ROOT, RB_RALPH_PLAN_PATH,
-  RB_RALPH_PHASE_ID, RB_RALPH_ATTEMPT, and RB_RALPH_AGENT_LOG.
-  Task agents also receive RB_RALPH_TASK_ID.
+  RB_RALPH_PHASE_ID and RB_RALPH_ATTEMPT. Task agents also receive
+  RB_RALPH_TASK_ID. Executors receive RB_RALPH_AGENT_EVIDENCE_DIR, an isolated
+  submission directory; orchestrator-owned logs under .rb/runs are never
+  exposed as writable executor output.
   Every call receives RB_RALPH_TELEMETRY_FILE for an optional
   rb-ralph-usage/v1 record, plus RB_RALPH_PERMISSION_MODE and RB_RALPH_YOLO.
   Custom adapters must honor protected mode or fail clearly if unsupported.
@@ -527,6 +532,65 @@ record_event() {
   printf '%s\t%s\t%s\t%s\t%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$phase" "$attempt" "$status" "$reason" >> "$EVENTS_FILE"
 }
 
+record_finding() {
+  local phase="$1" attempt="$2" reason="$3" fingerprint="$4" finding_id
+  reason="${reason//$'\t'/ }"
+  reason="${reason//$'\n'/ }"
+  finding_id="F-${phase}-A$(printf '%03d' "$attempt")"
+  printf '%s\t%s\t%s\topen\t%s\t%s\t\t\n' \
+    "$finding_id" "$phase" "$attempt" "$reason" "$fingerprint" >> "$FINDINGS_FILE"
+}
+
+open_findings() {
+  local phase="$1"
+  [ -f "$FINDINGS_FILE" ] || return 0
+  awk -F '\t' -v phase="$phase" \
+    '$2 == phase && $4 == "open" { printf "- %s (attempt %s): %s\n", $1, $3, $5 }' \
+    "$FINDINGS_FILE"
+}
+
+resolve_findings() {
+  local phase="$1" attempt="$2" fingerprint="$3" temporary
+  [ -f "$FINDINGS_FILE" ] || return 0
+  temporary="${FINDINGS_FILE}.tmp-$$"
+  awk -F '\t' -v OFS='\t' -v phase="$phase" -v attempt="$attempt" -v fingerprint="$fingerprint" '
+    NR == 1 { print; next }
+    $2 == phase && $4 == "open" { $4="resolved"; $7=attempt; $8=fingerprint }
+    { print }
+  ' "$FINDINGS_FILE" > "$temporary"
+  mv "$temporary" "$FINDINGS_FILE"
+}
+
+evidence_fingerprint() {
+  node -e '
+    const fs=require("node:fs"), crypto=require("node:crypto");
+    const [changesPath, validationPath, root] = process.argv.slice(1);
+    const changes=JSON.parse(fs.readFileSync(changesPath, "utf8"));
+    const h=crypto.createHash("sha256");
+    for (const kind of ["added", "modified", "deleted"]) {
+      for (const path of [...(changes[kind] ?? [])].sort()) {
+        h.update(`${kind}:${path}\0`);
+        if (kind !== "deleted") {
+          try { h.update(fs.readFileSync(require("node:path").resolve(root, path))); }
+          catch { h.update("<unavailable>"); }
+        }
+      }
+    }
+    const validation=fs.readFileSync(validationPath, "utf8")
+      .replace(/^phase=.*$/m, "phase=<normalized> attempt=<normalized> mode=<normalized>");
+    h.update(validation);
+    process.stdout.write(h.digest("hex"));
+  ' "$@"
+}
+
+open_finding_has_same_evidence() {
+  local phase="$1" fingerprint="$2"
+  awk -F '\t' -v phase="$phase" -v fingerprint="$fingerprint" '
+    $2 == phase && $4 == "open" && $6 == fingerprint { found=1 }
+    END { exit(found ? 0 : 1) }
+  ' "$FINDINGS_FILE"
+}
+
 manager_failure_summary() {
   local log_file="$1" exit_code="$2" provider="$3" model="$4"
   local label log_reference go_model
@@ -652,13 +716,20 @@ write_agent_prompt() {
     printf '%s\n' \
       'Respect existing code and tests. Re-check existing work before editing so retries remain idempotent.' \
       'Do not alter RB contracts or claim completion without evidence.' \
-      'Return a concise summary of changes, validations, failures, and remaining risks.'
+      'Never create or modify .rb/runs; it is orchestrator-owned control-plane state. Put optional evidence files only in RB_RALPH_AGENT_EVIDENCE_DIR.' \
+      'Return a concise summary of changes, validations, failures, and remaining risks.' \
+      'End a genuinely completed final response with the exact line RB_RALPH_EXECUTOR_STATUS: COMPLETE. Do not emit it after an interrupted tool call or partial turn.'
     if [ -n "$LAST_FEEDBACK" ]; then
       printf '\nPREVIOUS_MANAGER_FEEDBACK: %s\n' "$LAST_FEEDBACK"
       printf 'PREVIOUS_AGENT_LOG: %s\n' "$LAST_AGENT_LOG"
       printf 'PREVIOUS_VALIDATION_LOG: %s\n' "$LAST_VALIDATION_LOG"
       printf 'PREVIOUS_CHANGED_PATHS: %s\n' "$LAST_CHANGED_PATHS"
       printf '%s\n' 'Address the evidenced failure from the previous attempt; do not repeat unchanged work.'
+    fi
+    if [ -n "${FINDINGS_FILE:-}" ] && [ -n "$(open_findings "$phase_id")" ]; then
+      printf '%s\n' '' '--- CUMULATIVE MANAGER FINDINGS ---'
+      open_findings "$phase_id"
+      printf '%s\n' 'Address every open finding or dispute it with current canonical evidence. A newer finding never erases an older one.'
     fi
     if [ -n "${RECOVERY_NOTE:-}" ]; then
       printf '\nRECOVERY_ESCALATION: %s\n' "$RECOVERY_NOTE"
@@ -676,9 +747,15 @@ write_agent_prompt() {
 
 invoke_agent() {
   local prompt="$1" output="$2" task_id="$3" execution_root="$4" telemetry
+  local capture_root provider_output submission_dir submission_target temporary_output temporary_telemetry agent_result=0
   telemetry="$USAGE_DIR/$(basename "${output%.log}").usage.json"
-  usage_placeholder "$telemetry" "${AGENT_PROVIDER:-custom}" agent "$task_id" "$AGENT_MODEL"
-  (
+  capture_root="$(mktemp -d "${TMPDIR:-/tmp}/rb-ralph-agent-capture.XXXXXX")"
+  provider_output="$capture_root/provider.log"
+  submission_dir="$capture_root/submission"
+  temporary_telemetry="$capture_root/usage.json"
+  mkdir -p "$submission_dir"
+  usage_placeholder "$temporary_telemetry" "${AGENT_PROVIDER:-custom}" agent "$task_id" "$AGENT_MODEL"
+  if (
     cd "$execution_root"
     RB_RALPH_ROLE="agent" \
     RB_RALPH_PROJECT_ROOT="$execution_root" \
@@ -687,18 +764,89 @@ invoke_agent() {
     RB_RALPH_OPERATIONAL_CONTRACT="$OPERATIONAL_CONTRACT" \
     RB_RALPH_TASK_ID="$task_id" \
     RB_RALPH_ATTEMPT="$attempt" \
-    RB_RALPH_AGENT_LOG="$output" \
-    RB_RALPH_TELEMETRY_FILE="$telemetry" \
+    RB_RALPH_AGENT_EVIDENCE_DIR="$submission_dir" \
+    RB_RALPH_TELEMETRY_FILE="$temporary_telemetry" \
     RB_RALPH_MODEL="$AGENT_MODEL" \
     RB_RALPH_AGENT_MODEL="$AGENT_MODEL" \
     RB_RALPH_MANAGER_MODEL="$MANAGER_MODEL" \
     RB_RALPH_PERMISSION_MODE="$PERMISSION_MODE" \
     RB_RALPH_YOLO="$(if [ "$PERMISSION_MODE" = yolo ]; then printf 1; else printf 0; fi)" \
     node "$PROCESS_SUPERVISOR" \
-      --input "$prompt" --output "$output" \
+      --input "$prompt" --output "$provider_output" \
       --idle-timeout "$AGENT_IDLE_TIMEOUT" --timeout "$AGENT_TIMEOUT" \
       --label executor -- "$AGENT_CMD"
-  )
+  ); then
+    agent_result=0
+  else
+    agent_result=$?
+  fi
+  temporary_output="${output}.tmp-$$-$RANDOM"
+  cp -- "$provider_output" "$temporary_output"
+  chmod 600 "$temporary_output"
+  mv "$temporary_output" "$output"
+  if [ -f "$temporary_telemetry" ]; then
+    mkdir -p "$(dirname "$telemetry")"
+    mv "$temporary_telemetry" "$telemetry"
+  fi
+  if find "$submission_dir" -mindepth 1 -print -quit | grep -q .; then
+    submission_target="$STATE_DIR/evidence/$(basename "${output%.log}")-agent-submission"
+    mkdir -p "$submission_target"
+    cp -a "$submission_dir/." "$submission_target/"
+  fi
+  case "$capture_root" in
+    "${TMPDIR:-/tmp}"/rb-ralph-agent-capture.*) rm -rf -- "$capture_root" ;;
+  esac
+  return "$agent_result"
+}
+
+invoke_manager() {
+  local prompt="$1" output="$2" telemetry="$3"
+  local capture_root provider_output temporary_output temporary_telemetry manager_result=0
+  capture_root="$(mktemp -d "${TMPDIR:-/tmp}/rb-ralph-manager-capture.XXXXXX")"
+  provider_output="$capture_root/provider.log"
+  temporary_telemetry="$capture_root/usage.json"
+  usage_placeholder "$temporary_telemetry" "${MANAGER_PROVIDER:-custom}" manager "" "$MANAGER_MODEL"
+  if (
+    cd "$PROJECT"
+    RB_RALPH_ROLE="manager" \
+    RB_RALPH_PROJECT_ROOT="$PROJECT" \
+    RB_RALPH_PLAN_PATH="$PLAN_PATH" \
+    RB_RALPH_PHASE_ID="$phase_id" \
+    RB_RALPH_PHASE_TITLE="$title" \
+    RB_RALPH_OPERATIONAL_CONTRACT="$OPERATIONAL_CONTRACT" \
+    RB_RALPH_ATTEMPT="$attempt" \
+    RB_RALPH_MANAGER_RETRY="$manager_try" \
+    RB_RALPH_AGENT_LOG="$AGENT_LOG" \
+    RB_RALPH_VALIDATION_LOG="$VALIDATION_LOG" \
+    RB_RALPH_CHANGED_PATHS_FILE="$CHANGED_PATHS_FILE" \
+    RB_RALPH_AGENT_EXIT_CODE="$agent_rc" \
+    RB_RALPH_TELEMETRY_FILE="$temporary_telemetry" \
+    RB_RALPH_MODEL="$MANAGER_MODEL" \
+    RB_RALPH_AGENT_MODEL="$AGENT_MODEL" \
+    RB_RALPH_MANAGER_MODEL="$MANAGER_MODEL" \
+    RB_RALPH_PERMISSION_MODE="$PERMISSION_MODE" \
+    RB_RALPH_YOLO="$(if [ "$PERMISSION_MODE" = yolo ]; then printf 1; else printf 0; fi)" \
+    node "$PROCESS_SUPERVISOR" \
+      --input "$prompt" --output "$provider_output" \
+      --idle-timeout "$MANAGER_IDLE_TIMEOUT" --timeout "$MANAGER_TIMEOUT" \
+      --label manager -- "$MANAGER_CMD"
+  ); then
+    manager_result=0
+  else
+    manager_result=$?
+  fi
+  temporary_output="${output}.tmp-$$-$RANDOM"
+  cp -- "$provider_output" "$temporary_output"
+  chmod 600 "$temporary_output"
+  mv "$temporary_output" "$output"
+  if [ -f "$temporary_telemetry" ]; then
+    mkdir -p "$(dirname "$telemetry")"
+    mv "$temporary_telemetry" "$telemetry"
+  fi
+  case "$capture_root" in
+    "${TMPDIR:-/tmp}"/rb-ralph-manager-capture.*) rm -rf -- "$capture_root" ;;
+  esac
+  return "$manager_result"
 }
 
 git_snapshot_commit() {
@@ -1252,6 +1400,7 @@ done
 [[ "$MAX_STRATEGY_RESETS" =~ ^[0-9]+$ ]] || die "--max-strategy-resets must be a non-negative integer"
 [[ "$MAX_MANAGER_RETRIES" =~ ^[0-9]+$ ]] || die "--manager-retries must be a non-negative integer"
 [[ "$MANAGER_RETRY_WAIT" =~ ^[0-9]+$ ]] || die "--manager-retry-wait must be a non-negative integer"
+[[ "$MAX_INCOMPLETE_RETRIES" =~ ^[0-9]+$ ]] || die "RB_RALPH_MAX_INCOMPLETE_RETRIES must be a non-negative integer"
 [[ "$AGENT_TIMEOUT" =~ ^[0-9]+$ ]] || die "--agent-timeout must be a non-negative integer"
 [[ "$AGENT_IDLE_TIMEOUT" =~ ^[0-9]+$ ]] || die "--agent-idle-timeout must be a non-negative integer"
 [[ "$MANAGER_TIMEOUT" =~ ^[0-9]+$ ]] || die "--manager-timeout must be a non-negative integer"
@@ -1450,6 +1599,7 @@ fi
 configure_roles
 [ -f "$EVIDENCE_HELPER" ] || die "RB Ralph evidence helper not found: $EVIDENCE_HELPER; reinstall the complete package instead of copying only bin/rb-ralph"
 [ -f "$PROCESS_SUPERVISOR" ] || die "RB Ralph process supervisor not found: $PROCESS_SUPERVISOR; reinstall the complete package instead of copying only bin/rb-ralph"
+[ -f "$CONTROL_PLANE_HELPER" ] || die "RB Ralph control-plane helper not found: $CONTROL_PLANE_HELPER; reinstall the complete package instead of copying only bin/rb-ralph"
 if [ -t 1 ] && [ "$DASHBOARD" -eq 0 ]; then
   print_brand
   printf '\n'
@@ -1458,6 +1608,7 @@ fi
 RUN_ID="${PLAN_ID}-${PLAN_HASH:0:12}"
 STATE_DIR="$PROJECT/.rb/runs/$RUN_ID"
 EVENTS_FILE="$STATE_DIR/events.tsv"
+FINDINGS_FILE="$STATE_DIR/findings.tsv"
 OPERATIONAL_ACCEPTED_FILE="$STATE_DIR/operational-accepted.txt"
 LOCK_DIR="$STATE_DIR/.lock"
 mkdir -p "$STATE_DIR/prompts" "$STATE_DIR/logs" "$STATE_DIR/phases" "$STATE_DIR/evidence" "$STATE_DIR/memory/checkpoints"
@@ -1472,6 +1623,9 @@ if [ ! -f "$STATE_DIR/run.tsv" ]; then
 fi
 if [ ! -f "$EVENTS_FILE" ]; then
   printf 'timestamp\tphase_id\tattempt\tstatus\treason\n' > "$EVENTS_FILE"
+fi
+if [ ! -f "$FINDINGS_FILE" ]; then
+  printf 'finding_id\tphase_id\topened_attempt\tstatus\treason\topened_evidence_sha256\tresolved_attempt\tresolved_evidence_sha256\n' > "$FINDINGS_FILE"
 fi
 
 [ -f "$TELEMETRY_HELPER" ] || die "RB Ralph telemetry helper not found: $TELEMETRY_HELPER; reinstall the complete package"
@@ -1559,6 +1713,23 @@ while IFS= read -r tsv_row; do
     VALIDATIONS="$(core_cli_call contract validations "$PLAN_ABSOLUTE" --phase "$phase_id" --format tsv)"
     TASKS="$(core_cli_call contract tasks "$PLAN_ABSOLUTE" --phase "$phase_id" --format tsv)"
   fi
+  HUMAN_VALIDATION_SUMMARY="$(
+    while IFS= read -r validation_row; do
+      IFS="$TSV_SEPARATOR" read -r validation_task validation_kind validation_value \
+        <<< "${validation_row//$'\t'/$TSV_SEPARATOR}"
+      [ "$validation_kind" = "human" ] || continue
+      printf '%s: %s; ' "$validation_task" "$validation_value"
+    done <<< "$VALIDATIONS"
+  )"
+  if [ -n "$HUMAN_VALIDATION_SUMMARY" ]; then
+    human_reason="external human evidence required before execution: $HUMAN_VALIDATION_SUMMARY"
+    record_event "$phase_id" 0 "PAUSED_HUMAN" "$human_reason"
+    dashboard_set_phase "$phase_id" paused "$human_reason" "preflight"
+    dashboard_finish paused
+    wait_dashboard
+    printf 'PAUSED: %s\n' "$human_reason" >&2
+    exit 2
+  fi
   PENDING_TASK_IDS=()
   PENDING_TASK_DEPS=()
   all_pending_parallel=1
@@ -1614,6 +1785,7 @@ while IFS= read -r tsv_row; do
   same_feedback_count=0
   phase_run_attempts=0
   rate_limit_waits=0
+  incomplete_retries=0
 
   while :; do
     if [ "$MAX_TOTAL_ATTEMPTS" -gt 0 ] && [ "$phase_run_attempts" -ge "$MAX_TOTAL_ATTEMPTS" ]; then
@@ -1638,9 +1810,13 @@ while IFS= read -r tsv_row; do
     MANAGER_LOG="$STATE_DIR/logs/$phase_id-attempt-$attempt-manager.log"
     BEFORE_SNAPSHOT="$STATE_DIR/evidence/$phase_id-attempt-$attempt-before.json"
     CHANGED_PATHS_FILE="$STATE_DIR/evidence/$phase_id-attempt-$attempt-changes.json"
+    CONTROL_SNAPSHOT="$(mktemp "${TMPDIR:-/tmp}/rb-ralph-control-before.XXXXXX")"
+    CONTROL_DIFF="$(mktemp "${TMPDIR:-/tmp}/rb-ralph-control-diff.XXXXXX")"
 
     node "$EVIDENCE_HELPER" snapshot "$PROJECT" "$BEFORE_SNAPSHOT" \
       || die "$phase_id could not capture pre-agent project evidence"
+    node "$CONTROL_PLANE_HELPER" snapshot "$STATE_DIR" "$CONTROL_SNAPSHOT" \
+      || die "$phase_id could not protect orchestrator control-plane evidence"
 
     agent_rc=0
     ATTEMPT_TEMP_ROOT=""
@@ -1705,6 +1881,22 @@ while IFS= read -r tsv_row; do
       invoke_agent "$AGENT_PROMPT" "$AGENT_LOG" "" "$PROJECT" || agent_rc=$?
     fi
 
+    control_plane_rc=0
+    node "$CONTROL_PLANE_HELPER" diff "$STATE_DIR" "$CONTROL_SNAPSHOT" "$CONTROL_DIFF" \
+      || control_plane_rc=$?
+    rm -f -- "$CONTROL_SNAPSHOT"
+    if [ "$control_plane_rc" -eq 3 ]; then
+      agent_rc=1
+      printf '\nRB_RALPH_CONTROL_PLANE_VIOLATION: executor modified or deleted orchestrator-owned artifacts\n' >> "$AGENT_LOG"
+      cat "$CONTROL_DIFF" >> "$AGENT_LOG"
+      record_event "$phase_id" "$attempt" "CONTROL_PLANE_VIOLATION" \
+        "executor modified existing .rb/runs artifacts; attempt rejected"
+    elif [ "$control_plane_rc" -ne 0 ]; then
+      rm -f -- "$CONTROL_DIFF"
+      die "$phase_id could not verify orchestrator control-plane integrity"
+    fi
+    rm -f -- "$CONTROL_DIFF"
+
     if provider_rate_limited "$AGENT_LOG" "$agent_rc"; then
       rate_limit_waits=$((rate_limit_waits + 1))
       if [ "$rate_limit_waits" -gt "$MAX_RATE_LIMIT_WAITS" ]; then
@@ -1715,6 +1907,11 @@ while IFS= read -r tsv_row; do
       record_event "$phase_id" "$attempt" "RATE_LIMIT" "agent wait ${wait_seconds}s ($rate_limit_waits/$MAX_RATE_LIMIT_WAITS)"
       dashboard_gate "$phase_id" 0 pending "provider limit · waiting ${wait_seconds}s before retry"
       log "$phase_id provider limit: waiting ${wait_seconds}s without consuming attempt $attempt"
+      mv "$AGENT_LOG" "$STATE_DIR/logs/$phase_id-attempt-$attempt-rate-limit-$rate_limit_waits-agent.log"
+      rate_telemetry="$USAGE_DIR/$(basename "${AGENT_LOG%.log}").usage.json"
+      if [ -f "$rate_telemetry" ]; then
+        mv "$rate_telemetry" "$USAGE_DIR/$phase_id-attempt-$attempt-rate-limit-$rate_limit_waits-agent.usage.json"
+      fi
       if [ -n "$ATTEMPT_TEMP_ROOT" ]; then
         cleanup_attempt_worktrees "$ATTEMPT_TEMP_ROOT" "${ATTEMPT_WORKTREES[@]}"
       fi
@@ -1743,6 +1940,31 @@ while IFS= read -r tsv_row; do
     dashboard_gate "$phase_id" 1 run "G1 · capturing changed-code evidence"
     node "$EVIDENCE_HELPER" diff "$PROJECT" "$BEFORE_SNAPSHOT" "$CHANGED_PATHS_FILE" \
       || die "$phase_id could not capture changed-path evidence"
+    change_count="$(evidence_change_count "$CHANGED_PATHS_FILE")"
+    if [ "$agent_rc" -eq 0 ] && [ "$change_count" -eq 0 ] \
+      && [ -n "$AGENT_PROVIDER" ] \
+      && ! grep -Fq 'RB_RALPH_EXECUTOR_STATUS: COMPLETE' "$AGENT_LOG"; then
+      incomplete_retries=$((incomplete_retries + 1))
+      incomplete_reason="executor provider ended cleanly with no workspace delta and no completed final-response marker"
+      record_event "$phase_id" "$attempt" "EXECUTOR_INCOMPLETE" \
+        "$incomplete_reason ($incomplete_retries/$MAX_INCOMPLETE_RETRIES); manager not invoked"
+      mv "$AGENT_LOG" "$STATE_DIR/logs/$phase_id-attempt-$attempt-incomplete-$incomplete_retries-agent.log"
+      if [ "$incomplete_retries" -gt "$MAX_INCOMPLETE_RETRIES" ]; then
+        pause_reason="executor completion circuit breaker after $incomplete_retries incomplete provider turn(s): $incomplete_reason"
+        record_event "$phase_id" "$attempt" "PAUSED" "$pause_reason"
+        dashboard_set_phase "$phase_id" paused "$pause_reason" "$(attempt_display "$attempt" "$stalled_attempts")"
+        dashboard_finish paused
+        wait_dashboard
+        printf 'PAUSED: %s\n' "$pause_reason" >&2
+        exit 2
+      fi
+      dashboard_gate "$phase_id" 0 pending \
+        "G0 · incomplete provider turn; retrying executor without manager review"
+      log "$phase_id incomplete executor turn: retry $incomplete_retries/$MAX_INCOMPLETE_RETRIES without consuming an implementation attempt"
+      phase_run_attempts=$((phase_run_attempts - 1))
+      continue
+    fi
+    incomplete_retries=0
     agent_timed_out=0
     agent_timeout_kind=""
     agent_timeout_limit=""
@@ -1806,12 +2028,16 @@ while IFS= read -r tsv_row; do
             manual_validations=$((manual_validations + 1))
             printf '\n[%s] manual: %s\n' "$validation_task" "$validation_value" >> "$VALIDATION_LOG"
             ;;
+          human)
+            printf '\n[%s] human: %s\n' "$validation_task" "$validation_value" >> "$VALIDATION_LOG"
+            ;;
         esac
       done <<< "$VALIDATIONS"
     else
       printf 'Deterministic commands delegated to manager by configuration.\n' >> "$VALIDATION_LOG"
     fi
     log "$phase_id validations: commands=$validation_commands failures=$validation_failures manual=$manual_validations mode=$VALIDATION_MODE"
+    CURRENT_EVIDENCE_FINGERPRINT="$(evidence_fingerprint "$CHANGED_PATHS_FILE" "$VALIDATION_LOG" "$PROJECT")"
     if [ "$phase_id" = "$FINAL_PHASE_ID" ] && [ -n "$OPERATIONAL_CONTRACT" ]; then
       if [ "$validation_failures" -eq 0 ]; then
         dashboard_gate "$phase_id" 2 pass "G2 · clean-room operational contract passed"
@@ -1840,6 +2066,7 @@ while IFS= read -r tsv_row; do
         "$VALIDATION_MODE" "$validation_commands" "$validation_failures"
       printf 'MANUAL_VALIDATIONS: %s\nVALIDATION_LOG: %s\n\n' \
         "$manual_validations" "${VALIDATION_LOG#"$PROJECT/"}"
+      printf 'EVIDENCE_FINGERPRINT: %s\n\n' "$CURRENT_EVIDENCE_FINGERPRINT"
       if [ "$phase_id" = "$FINAL_PHASE_ID" ]; then
         printf '%s\n' \
           'FINAL_OPERATIONAL_AUDIT: 1' \
@@ -1865,11 +2092,19 @@ while IFS= read -r tsv_row; do
         'RB_RALPH_REASON: <short evidence-based reason>' \
         '' \
         'Use COMPLETE only when every task and criterion is evidenced.' \
+        'Findings are cumulative across retries. COMPLETE means every open finding below is resolved by current code or canonical evidence; a new reason never erases an older one.' \
         'Use RETRY when another implementation attempt can reasonably fix the result. Implementation defects, test failures, incomplete criteria, and incorrect technical approaches are RETRY, never BLOCKED.' \
         'When AGENT_TIMED_OUT is 1, inspect all partial evidence, return RETRY, and give the next executor a concrete recovery strategy that avoids the stalled command or approach. An executor timeout is recoverable and must not be treated as a terminal implementation failure.' \
         'For RETRY, make the reason concrete enough for the executor to correct its approach on the next ephemeral call.' \
         'Use BLOCKED only when an external decision, missing authority, unavailable credential/provider, or unsafe ambiguity prevents implementation progress.' \
         '' \
+        '--- CUMULATIVE OPEN FINDINGS ---'
+      if [ -n "$(open_findings "$phase_id")" ]; then
+        open_findings "$phase_id"
+      else
+        printf '%s\n' '(none)'
+      fi
+      printf '%s\n' '' \
         '--- CHANGED PATH SUMMARY (inspect current file contents in PROJECT_ROOT) ---'
       cat "$CHANGED_PATHS_FILE"
       printf '%s\n' '' \
@@ -1904,32 +2139,27 @@ while IFS= read -r tsv_row; do
       dashboard_gate "$phase_id" 3 run "G3 · technical manager is reviewing evidence"
       manager_rc=0
       MANAGER_TELEMETRY_FILE="$USAGE_DIR/$(basename "${ACTIVE_MANAGER_LOG%.log}").usage.json"
-      usage_placeholder "$MANAGER_TELEMETRY_FILE" "${MANAGER_PROVIDER:-custom}" manager "" "$MANAGER_MODEL"
-      (
-        cd "$PROJECT"
-        RB_RALPH_ROLE="manager" \
-        RB_RALPH_PROJECT_ROOT="$PROJECT" \
-        RB_RALPH_PLAN_PATH="$PLAN_PATH" \
-        RB_RALPH_PHASE_ID="$phase_id" \
-        RB_RALPH_PHASE_TITLE="$title" \
-        RB_RALPH_OPERATIONAL_CONTRACT="$OPERATIONAL_CONTRACT" \
-        RB_RALPH_ATTEMPT="$attempt" \
-        RB_RALPH_MANAGER_RETRY="$manager_try" \
-        RB_RALPH_AGENT_LOG="$AGENT_LOG" \
-        RB_RALPH_VALIDATION_LOG="$VALIDATION_LOG" \
-        RB_RALPH_CHANGED_PATHS_FILE="$CHANGED_PATHS_FILE" \
-        RB_RALPH_AGENT_EXIT_CODE="$agent_rc" \
-        RB_RALPH_TELEMETRY_FILE="$MANAGER_TELEMETRY_FILE" \
-        RB_RALPH_MODEL="$MANAGER_MODEL" \
-        RB_RALPH_AGENT_MODEL="$AGENT_MODEL" \
-        RB_RALPH_MANAGER_MODEL="$MANAGER_MODEL" \
-        RB_RALPH_PERMISSION_MODE="$PERMISSION_MODE" \
-        RB_RALPH_YOLO="$(if [ "$PERMISSION_MODE" = yolo ]; then printf 1; else printf 0; fi)" \
-        node "$PROCESS_SUPERVISOR" \
-          --input "$ACTIVE_MANAGER_PROMPT" --output "$ACTIVE_MANAGER_LOG" \
-          --idle-timeout "$MANAGER_IDLE_TIMEOUT" --timeout "$MANAGER_TIMEOUT" \
-          --label manager -- "$MANAGER_CMD"
-      ) || manager_rc=$?
+      MANAGER_CONTROL_SNAPSHOT="$(mktemp "${TMPDIR:-/tmp}/rb-ralph-manager-control-before.XXXXXX")"
+      MANAGER_CONTROL_DIFF="$(mktemp "${TMPDIR:-/tmp}/rb-ralph-manager-control-diff.XXXXXX")"
+      node "$CONTROL_PLANE_HELPER" snapshot "$STATE_DIR" "$MANAGER_CONTROL_SNAPSHOT" \
+        || die "$phase_id could not protect control-plane evidence before manager review"
+      invoke_manager "$ACTIVE_MANAGER_PROMPT" "$ACTIVE_MANAGER_LOG" "$MANAGER_TELEMETRY_FILE" \
+        || manager_rc=$?
+      manager_control_rc=0
+      node "$CONTROL_PLANE_HELPER" diff "$STATE_DIR" "$MANAGER_CONTROL_SNAPSHOT" "$MANAGER_CONTROL_DIFF" \
+        || manager_control_rc=$?
+      rm -f -- "$MANAGER_CONTROL_SNAPSHOT"
+      if [ "$manager_control_rc" -eq 3 ]; then
+        manager_rc=1
+        printf '\nRB_RALPH_CONTROL_PLANE_VIOLATION: manager modified or deleted orchestrator-owned artifacts\n' >> "$ACTIVE_MANAGER_LOG"
+        cat "$MANAGER_CONTROL_DIFF" >> "$ACTIVE_MANAGER_LOG"
+        record_event "$phase_id" "$attempt" "CONTROL_PLANE_VIOLATION" \
+          "manager modified existing .rb/runs artifacts; review rejected"
+      elif [ "$manager_control_rc" -ne 0 ]; then
+        rm -f -- "$MANAGER_CONTROL_DIFF"
+        die "$phase_id could not verify control-plane integrity after manager review"
+      fi
+      rm -f -- "$MANAGER_CONTROL_DIFF"
       refresh_usage_summary
 
       if provider_rate_limited "$ACTIVE_MANAGER_LOG" "$manager_rc"; then
@@ -1944,6 +2174,10 @@ while IFS= read -r tsv_row; do
           "rate limit: aguardando ${wait_seconds}s para revisar a mesma evidência ($rate_limit_waits/${MAX_RATE_LIMIT_WAITS:-0})"
         dashboard_gate "$phase_id" 3 pending "manager provider limit · waiting ${wait_seconds}s; executor will not be repeated"
         log "$phase_id manager provider limit: waiting ${wait_seconds}s; preserving executor evidence"
+        mv "$ACTIVE_MANAGER_LOG" "$STATE_DIR/logs/$phase_id-attempt-$attempt-manager-rate-limit-$rate_limit_waits.log"
+        if [ -f "$MANAGER_TELEMETRY_FILE" ]; then
+          mv "$MANAGER_TELEMETRY_FILE" "$USAGE_DIR/$phase_id-attempt-$attempt-manager-rate-limit-$rate_limit_waits.usage.json"
+        fi
         sleep "$wait_seconds"
         manager_try=$((manager_try - 1))
         continue
@@ -1979,6 +2213,10 @@ while IFS= read -r tsv_row; do
         elif [ "$decision" = "COMPLETE" ] && [ "$validation_failures" -gt 0 ]; then
           decision="RETRY"
           reason="deterministic validation failed ($validation_failures command(s)); $reason"
+        elif [ "$decision" = "COMPLETE" ] \
+          && open_finding_has_same_evidence "$phase_id" "$CURRENT_EVIDENCE_FINGERPRINT"; then
+          decision="RETRY"
+          reason="manager attempted to close an open finding with the same canonical code/validation evidence that opened it; a workspace change, new canonical proof, or explicit authorized waiver is required; $reason"
         fi
         break
       fi
@@ -2004,6 +2242,7 @@ while IFS= read -r tsv_row; do
       COMPLETE)
         dashboard_gate "$phase_id" 3 pass "G3 · phase accepted by technical manager"
         record_event "$phase_id" "$attempt" "COMPLETE" "$reason"
+        resolve_findings "$phase_id" "$attempt" "$CURRENT_EVIDENCE_FINGERPRINT"
         if [ "$phase_id" = "$FINAL_PHASE_ID" ]; then
           printf '%s\n' "$OPERATIONAL_FINGERPRINT" > "$OPERATIONAL_ACCEPTED_FILE"
         fi
@@ -2055,6 +2294,7 @@ while IFS= read -r tsv_row; do
         fi
         dashboard_gate "$phase_id" 3 fail "G3 · manager requested another implementation attempt"
         record_event "$phase_id" "$attempt" "RETRY" "$reason"
+        record_finding "$phase_id" "$attempt" "$reason" "$CURRENT_EVIDENCE_FINGERPRINT"
         log "$phase_id retry requested: $reason ($progress_note; stalled=$stalled_attempts/$MAX_ATTEMPTS)"
         dashboard_set_phase "$phase_id" retry "$reason · $progress_note" "$(attempt_display "$attempt" "$stalled_attempts")"
         LAST_FEEDBACK="$reason"

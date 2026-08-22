@@ -163,6 +163,7 @@ INSTALL_PREFIX="$TEMP_ROOT/installed prefix"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/adapters/codex.sh" ] || fail "installed adapters are missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/adapters/opencode.sh" ] || fail "installed OpenCode adapter is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/evidence.cjs" ] || fail "installed evidence helper is missing"
+[ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/control-plane.cjs" ] || fail "installed control-plane helper is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/process-supervisor.cjs" ] || fail "installed process supervisor is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/operational-verifier.cjs" ] || fail "installed operational verifier is missing"
 [ -f "$INSTALL_PREFIX/libexec/rb-ralph/VERSION" ] || fail "installed version marker is missing"
@@ -170,9 +171,9 @@ INSTALL_PREFIX="$TEMP_ROOT/installed prefix"
 ok "temporary-prefix installation keeps launcher and auxiliary resources together"
 "$RALPH" --ver > "$TEMP_ROOT/source-version.out"
 "$INSTALL_PREFIX/bin/rb-ralph" --version > "$TEMP_ROOT/installed-version.out"
-assert_contains "$TEMP_ROOT/source-version.out" "RB Ralph 0.4.0" "source runner reports its package version"
-assert_contains "$TEMP_ROOT/installed-version.out" "RB Ralph 0.4.0" "installed runner reports the same package version"
-assert_contains "$TEMP_ROOT/install.out" "RB Ralph 0.4.0 installed" "installer reports the installed version"
+assert_contains "$TEMP_ROOT/source-version.out" "RB Ralph 0.5.0" "source runner reports its package version"
+assert_contains "$TEMP_ROOT/installed-version.out" "RB Ralph 0.5.0" "installed runner reports the same package version"
+assert_contains "$TEMP_ROOT/install.out" "RB Ralph 0.5.0 installed" "installer reports the installed version"
 SPACE_PROJECT="$(new_project 'project with spaces')"
 (cd / && "$INSTALL_PREFIX/bin/rb-ralph" --project "$SPACE_PROJECT" --list) > "$TEMP_ROOT/spaces.out"
 assert_contains "$TEMP_ROOT/spaces.out" "init-minimal-execution" "installed layout supports paths containing spaces"
@@ -919,7 +920,7 @@ assert_contains "$TEMP_ROOT/dashboard.out" "codex[priced-model] executor / codex
   "dashboard identifies the effective model for each role"
 assert_contains "$TEMP_ROOT/dashboard.out" "RALPH · capivara de plantão" \
   "wide dashboard renders the RB Ralph mascot"
-assert_contains "$TEMP_ROOT/dashboard.out" "v0.4.0" \
+assert_contains "$TEMP_ROOT/dashboard.out" "v0.5.0" \
   "dashboard identifies the running RB Ralph version"
 assert_contains "$TEMP_ROOT/dashboard.out" "LOG RECENTE · GERENTE" \
   "dashboard shows the current role in a compact recent-log panel"
@@ -1094,6 +1095,125 @@ MOCK_RUN_TAG=final-disabled RB_RALPH_FINAL_AUDIT=1 \
 FINAL_DISABLED_RUN="$(basename "$(find "$FINAL_DISABLED_PROJECT/.rb/runs" -mindepth 1 -maxdepth 1 -type d -print -quit)")"
 assert_not_contains "$FINAL_DISABLED_PROJECT/.rb/runs/$FINAL_DISABLED_RUN/events.tsv" $'\tRBF\t' \
   "--no-final-audit explicitly opts out without changing PHASES.md"
+
+# A manager cannot reverse a prior RETRY when code and canonical validation
+# evidence are byte-for-byte equivalent after normalization.
+cat > "$TEMP_ROOT/same-evidence-agent" <<'SAME_EVIDENCE_AGENT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > /dev/null
+printf 'no workspace change\n'
+SAME_EVIDENCE_AGENT
+cat > "$TEMP_ROOT/flipping-manager" <<'FLIPPING_MANAGER'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > /dev/null
+if [ "${RB_RALPH_ATTEMPT:?}" -eq 1 ]; then
+  printf '%s\n' 'RB_RALPH_DECISION: RETRY' 'RB_RALPH_REASON: canonical proof is absent'
+else
+  printf '%s\n' 'RB_RALPH_DECISION: COMPLETE' 'RB_RALPH_REASON: reinterpreted unchanged evidence'
+fi
+FLIPPING_MANAGER
+chmod +x "$TEMP_ROOT/same-evidence-agent" "$TEMP_ROOT/flipping-manager"
+SAME_EVIDENCE_PROJECT="$(new_project same-evidence-manager-flip)"
+expect_failure "$TEMP_ROOT/same-evidence.out" \
+  "$RALPH" --project "$SAME_EVIDENCE_PROJECT" --validation-mode manager \
+  --max-attempts 3 --max-total-attempts 2 \
+  --agent-cmd "$TEMP_ROOT/same-evidence-agent" --manager-cmd "$TEMP_ROOT/flipping-manager"
+assert_contains "$TEMP_ROOT/same-evidence.out" \
+  'manager attempted to close an open finding with the same canonical code/validation evidence' \
+  "unchanged evidence cannot flip a prior RETRY to COMPLETE"
+SAME_EVIDENCE_RUN="$(basename "$(find "$SAME_EVIDENCE_PROJECT/.rb/runs" -mindepth 1 -maxdepth 1 -type d -print -quit)")"
+assert_not_contains "$SAME_EVIDENCE_PROJECT/.rb/runs/$SAME_EVIDENCE_RUN/events.tsv" $'\tCOMPLETE\t' \
+  "same-evidence manager reinterpretation remains unresolved"
+
+# Human-only validation pauses in preflight without spending an executor call.
+cat > "$TEMP_ROOT/never-called-agent" <<'NEVER_CALLED_AGENT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'called\n' > "$MOCK_STATE/never-called-agent.marker"
+NEVER_CALLED_AGENT
+chmod +x "$TEMP_ROOT/never-called-agent"
+HUMAN_PROJECT="$(new_project human-validation-preflight)"
+sed -i 's#    - `npm test`#    - human: confirm the result on the target device#' \
+  "$HUMAN_PROJECT/.rb/features/test/PHASES.md"
+node "$CORE" manifest sync "$HUMAN_PROJECT" >/dev/null
+expect_failure "$TEMP_ROOT/human-validation.out" env MOCK_STATE="$MOCK_STATE" \
+  "$RALPH" --project "$HUMAN_PROJECT" --validation-mode manager \
+  --agent-cmd "$TEMP_ROOT/never-called-agent" --manager-cmd "$TEMP_ROOT/custom-manager"
+assert_not_exists "$MOCK_STATE/never-called-agent.marker" \
+  "human-only evidence pauses before invoking the executor"
+assert_contains "$TEMP_ROOT/human-validation.out" 'external human evidence required before execution' \
+  "human-only validation reports the exact preflight pause"
+HUMAN_RUN="$(basename "$(find "$HUMAN_PROJECT/.rb/runs" -mindepth 1 -maxdepth 1 -type d -print -quit)")"
+assert_contains "$HUMAN_PROJECT/.rb/runs/$HUMAN_RUN/events.tsv" $'\tPAUSED_HUMAN\t' \
+  "human-only validation is classified separately from implementation failure"
+
+# A built-in provider that exits zero after only reading receives bounded
+# executor-only retries; the premium manager never reviews incomplete evidence.
+cat > "$TEMP_ROOT/incomplete-codex" <<'INCOMPLETE_CODEX'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > /dev/null
+count_file="$MOCK_STATE/incomplete-executor.count"
+count=0
+[ ! -f "$count_file" ] || count="$(cat "$count_file")"
+printf '%s\n' "$((count + 1))" > "$count_file"
+printf 'inspected files but produced no final response marker\n'
+INCOMPLETE_CODEX
+cat > "$TEMP_ROOT/incomplete-manager" <<'INCOMPLETE_MANAGER'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > /dev/null
+printf 'called\n' > "$MOCK_STATE/incomplete-manager.marker"
+printf '%s\n' 'RB_RALPH_DECISION: COMPLETE' 'RB_RALPH_REASON: optimistic'
+INCOMPLETE_MANAGER
+chmod +x "$TEMP_ROOT/incomplete-codex" "$TEMP_ROOT/incomplete-manager"
+INCOMPLETE_PROJECT="$(new_project incomplete-provider-turn)"
+expect_failure "$TEMP_ROOT/incomplete-provider.out" env \
+  MOCK_STATE="$MOCK_STATE" RB_RALPH_CODEX_BIN="$TEMP_ROOT/incomplete-codex" \
+  RB_RALPH_MAX_INCOMPLETE_RETRIES=1 \
+  "$RALPH" --project "$INCOMPLETE_PROJECT" --validation-mode manager \
+  --agent-provider codex --manager-cmd "$TEMP_ROOT/incomplete-manager"
+[ "$(cat "$MOCK_STATE/incomplete-executor.count")" = 2 ] \
+  || fail "incomplete provider turn did not use exactly one bounded retry"
+ok "incomplete provider turns use the separate bounded executor retry budget"
+assert_not_exists "$MOCK_STATE/incomplete-manager.marker" \
+  "incomplete provider turns do not spend a manager review"
+INCOMPLETE_RUN="$(basename "$(find "$INCOMPLETE_PROJECT/.rb/runs" -mindepth 1 -maxdepth 1 -type d -print -quit)")"
+assert_contains "$INCOMPLETE_PROJECT/.rb/runs/$INCOMPLETE_RUN/events.tsv" $'\tEXECUTOR_INCOMPLETE\t' \
+  "incomplete provider turns are classified independently"
+
+# Existing orchestration artifacts are immutable executor inputs. A tampering
+# attempt is detected and cannot be converted to COMPLETE by the manager.
+cat > "$TEMP_ROOT/tampering-agent" <<'TAMPERING_AGENT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > /dev/null
+events="$(find .rb/runs -name events.tsv -type f -print -quit)"
+printf 'executor tampering\n' >> "$events"
+mkdir -p src
+printf 'application change\n' > src/tampered-attempt.txt
+printf 'finished\n'
+TAMPERING_AGENT
+cat > "$TEMP_ROOT/optimistic-manager" <<'OPTIMISTIC_MANAGER'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > /dev/null
+printf '%s\n' 'RB_RALPH_DECISION: COMPLETE' 'RB_RALPH_REASON: optimistic approval'
+OPTIMISTIC_MANAGER
+chmod +x "$TEMP_ROOT/tampering-agent" "$TEMP_ROOT/optimistic-manager"
+TAMPER_PROJECT="$(new_project control-plane-tampering)"
+expect_failure "$TEMP_ROOT/control-plane-tampering.out" \
+  "$RALPH" --project "$TAMPER_PROJECT" --validation-mode manager \
+  --max-attempts 1 --max-total-attempts 1 \
+  --agent-cmd "$TEMP_ROOT/tampering-agent" --manager-cmd "$TEMP_ROOT/optimistic-manager"
+TAMPER_RUN="$(basename "$(find "$TAMPER_PROJECT/.rb/runs" -mindepth 1 -maxdepth 1 -type d -print -quit)")"
+TAMPER_LOG="$TAMPER_PROJECT/.rb/runs/$TAMPER_RUN/logs/P01-attempt-1-agent.log"
+assert_contains "$TAMPER_LOG" 'RB_RALPH_CONTROL_PLANE_VIOLATION' \
+  "executor control-plane tampering is detected"
+assert_contains "$TEMP_ROOT/control-plane-tampering.out" 'implementation agent or isolated integration exited with 1' \
+  "manager optimism cannot override control-plane tampering"
 
 # 18. Both safe inspection modes avoid execution state.
 INSPECTION_PROJECT="$(new_project inspection-only)"

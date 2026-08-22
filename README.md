@@ -63,7 +63,7 @@ No auxiliary resource is written directly to `/bin`. The layout is:
     ├── bin/{rb-ralph,rb-ralph-watch}
     ├── adapters/{adapter-utils,codex,claude,opencode}.sh
     ├── core/rb-harness.cjs
-    ├── lib/{evidence,process-supervisor,operational-verifier,provider-telemetry,usage-summary,dashboard}.cjs
+    ├── lib/{evidence,control-plane,process-supervisor,operational-verifier,provider-telemetry,usage-summary,dashboard}.cjs
     ├── VERSION
     ├── pricing.example.json
     └── README.md
@@ -119,7 +119,7 @@ Confirm the exact source or installed build at any time with:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.4.0
+# RB Ralph 0.5.0
 ```
 
 The installer prints and copies the same `VERSION` marker, so a source upgrade
@@ -318,9 +318,21 @@ Codex caches or from the monorepo's internal layout participates in discovery.
   availability without consuming a logical implementation attempt.
 - Persists append-only events, prompts, phase snapshots, and logs under
   `.rb/runs/<artifact-id>-<sha12>/`.
+- Captures live provider output and optional executor submissions outside the
+  project, then publishes canonical run evidence atomically. Existing
+  orchestrator artifacts are integrity-checked so an executor cannot silently
+  rewrite prompts, logs, events, validations, or prior evidence.
 - Resumes phases already accepted by the manager for the same plan hash.
 - Supports progress-aware implementation retries, strategy recovery, a hard
   per-invocation cap, and resumable circuit-breaker pauses.
+- Persists a cumulative finding ledger. Every manager RETRY remains open across
+  later attempts until a COMPLETE decision resolves it against the current
+  changed-path and validation fingerprint; newer feedback never erases older
+  findings.
+- Detects built-in-provider turns that exit successfully with no workspace
+  delta and no completed final-response marker. Those incomplete turns receive
+  bounded executor-only retries and never spend a manager review or logical
+  implementation attempt.
 - Prevents manager approval from overriding a failed agent process or isolated
   patch integration.
 - Adds a runtime-only final phase (`RBF`) that verifies the completed product
@@ -401,6 +413,11 @@ rb-ralph --project . --provider codex --no-final-audit
 gate. A failing operational step forces `RETRY` even if the manager answers
 `COMPLETE`.
 
+The operational result has one owner: `RBF`. A normal phase may create and run
+the structural `operations validate` command, but its acceptance criteria must
+not require the later clean-room scenario to pass. That would make `RBF` depend
+on a phase which itself depends on `RBF`.
+
 ## Provider adapter contract
 
 Both commands are ordinary executables. From a source checkout:
@@ -424,7 +441,11 @@ following environment is available:
 - `RB_RALPH_ATTEMPT`.
 - `RB_RALPH_MANAGER_RETRY` for manager calls (`1` is the initial review;
   larger values review the same evidence again).
-- `RB_RALPH_AGENT_LOG`.
+- `RB_RALPH_AGENT_EVIDENCE_DIR` for the executor role. It is an isolated
+  optional submission directory outside the project; `.rb/runs` remains
+  orchestrator-owned.
+- `RB_RALPH_AGENT_LOG` for the manager role; this is the canonical executor
+  output published after the executor process exits.
 - `RB_RALPH_VALIDATION_LOG` for the manager role.
 - `RB_RALPH_CHANGED_PATHS_FILE` for the manager role.
 - `RB_RALPH_AGENT_EXIT_CODE` for the manager role.
@@ -455,6 +476,12 @@ RB_RALPH_REASON: Every criterion is covered and focused validations pass.
 `RETRY` and `BLOCKED` are the other valid decisions. Adapters own CLI-specific
 arguments, models, permissions, authentication, and output normalization, so
 the run manager does not hard-code Codex, Claude, or another provider.
+
+Built-in-provider executors are also asked to end a genuinely completed final
+response with `RB_RALPH_EXECUTOR_STATUS: COMPLETE`. Ralph consults this marker
+only when the provider exited zero and produced no workspace delta; absence is
+then treated as an incomplete provider turn rather than paid manager evidence.
+Custom adapters remain responsible for their own completion semantics.
 
 Ralph does not add secret-like files such as `.env`, private keys, or
 credential files to its changed-path summary. Custom adapters must avoid adding
@@ -824,6 +851,12 @@ bin/rb-ralph --project . --provider codex \
 Set `--validation-timeout 0` to disable the timeout. For a controlled adapter
 that owns all validation, use `--validation-mode manager`. This is less strict
 and is mainly useful for non-shell validation environments.
+
+`manual:` is reserved for a precise inspection the technical manager can make
+from repository or produced evidence. `human:` means the evidence needs a
+person, external device, credentialed environment, or subjective decision;
+Ralph pauses during preflight instead of wasting executor/manager retries on an
+observation neither role can perform.
 
 Validation commands are reviewed project input and execute with the invoking
 user's operating-system authority. They must be non-interactive and must not

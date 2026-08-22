@@ -210,6 +210,14 @@ RETRY_PROJECT="$(new_project retry-project)"
 MOCK_MANAGER_SCENARIO=retry-once "$RALPH" --project "$RETRY_PROJECT" --validation-mode manager --agent-cmd "$TEMP_ROOT/mock-agent" --manager-cmd "$TEMP_ROOT/mock-manager" > "$TEMP_ROOT/retry.out"
 assert_contains "$TEMP_ROOT/retry.out" "retry requested" "manager can request a bounded retry"
 assert_eq "2" "$(cat "$MOCK_STATE/agent-count")" "retry invokes a fresh implementation attempt"
+RETRY_FINDINGS="$(find "$RETRY_PROJECT/.rb/runs" -name findings.tsv -type f -print -quit)"
+assert_contains "$RETRY_FINDINGS" $'F-P02-A001\tP02\t1\tresolved\tfocused validation failed\t' \
+  "manager findings remain structured until later evidence resolves them"
+awk -F '\t' '$1 == "F-P02-A001" && $6 != "" && $7 == "2" && $8 != "" { found=1 } END { exit(found ? 0 : 1) }' \
+  "$RETRY_FINDINGS" || fail "finding resolution is not bound to opening and closing evidence fingerprints"
+ok "finding resolution is bound to opening and closing evidence fingerprints"
+assert_contains "$MOCK_STATE/agent-P02-2.txt" "F-P02-A001 (attempt 1): focused validation failed" \
+  "fresh executor receives the cumulative finding ledger"
 
 printf '0\n' > "$MOCK_STATE/agent-count"
 ECHOED_PROTOCOL_PROJECT="$(new_project echoed-protocol-project)"
