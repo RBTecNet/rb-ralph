@@ -115,9 +115,11 @@ DASHBOARD_ACTIVITY=""
 DASHBOARD_REASON=""
 ACTIVE_WORKTREES=()
 ACTIVE_TEMP_ROOTS=()
-declare -A DASHBOARD_PHASE_STATUS=()
-declare -A DASHBOARD_PHASE_ATTEMPT=()
-declare -A DASHBOARD_PHASE_GATES=()
+DASHBOARD_PHASE_IDS=()
+DASHBOARD_PHASE_STATUS=()
+DASHBOARD_PHASE_ATTEMPT=()
+DASHBOARD_PHASE_GATES=()
+DASHBOARD_PHASE_INDEX=-1
 TSV_SEPARATOR=$'\034'
 
 print_brand() {
@@ -905,9 +907,34 @@ dashboard_role_label() {
   if [ -n "$model" ]; then printf '%s[%s]' "$label" "$model"; else printf '%s' "$label"; fi
 }
 
+dashboard_find_phase_index() {
+  local requested_id="$1" index
+  DASHBOARD_PHASE_INDEX=-1
+  index=0
+  while [ "$index" -lt "${#DASHBOARD_PHASE_IDS[@]}" ]; do
+    if [ "${DASHBOARD_PHASE_IDS[$index]}" = "$requested_id" ]; then
+      DASHBOARD_PHASE_INDEX="$index"
+      return 0
+    fi
+    index=$((index + 1))
+  done
+  return 1
+}
+
+dashboard_ensure_phase_index() {
+  local requested_id="$1" index
+  if dashboard_find_phase_index "$requested_id"; then return 0; fi
+  index="${#DASHBOARD_PHASE_IDS[@]}"
+  DASHBOARD_PHASE_IDS[$index]="$requested_id"
+  DASHBOARD_PHASE_STATUS[$index]="pending"
+  DASHBOARD_PHASE_ATTEMPT[$index]="0"
+  DASHBOARD_PHASE_GATES[$index]="pending pending pending pending"
+  DASHBOARD_PHASE_INDEX="$index"
+}
+
 dashboard_write_live() {
   [ -n "${DASHBOARD_LIVE_FILE:-}" ] || return 0
-  local temporary="$DASHBOARD_LIVE_FILE.tmp.$$" id
+  local temporary="$DASHBOARD_LIVE_FILE.tmp.$$" id index
   {
     printf 'META\tstatus\t%s\n' "$DASHBOARD_STATUS"
     printf 'META\texecution_id\t%s\n' "$DASHBOARD_EXECUTION_ID"
@@ -918,9 +945,12 @@ dashboard_write_live() {
     printf 'META\tattempt\t%s\n' "$(dashboard_clean "$DASHBOARD_ATTEMPT")"
     printf 'META\tactivity\t%s\n' "$(dashboard_clean "$DASHBOARD_ACTIVITY")"
     printf 'META\treason\t%s\n' "$(dashboard_clean "$DASHBOARD_REASON")"
-    for id in "${!DASHBOARD_PHASE_STATUS[@]}"; do
-      printf 'PHASE\t%s\t%s\t%s\t%s\n' "$id" "${DASHBOARD_PHASE_STATUS[$id]}" \
-        "${DASHBOARD_PHASE_ATTEMPT[$id]:-0}" "${DASHBOARD_PHASE_GATES[$id]:-pending pending pending pending}"
+    index=0
+    while [ "$index" -lt "${#DASHBOARD_PHASE_IDS[@]}" ]; do
+      id="${DASHBOARD_PHASE_IDS[$index]}"
+      printf 'PHASE\t%s\t%s\t%s\t%s\n' "$id" "${DASHBOARD_PHASE_STATUS[$index]}" \
+        "${DASHBOARD_PHASE_ATTEMPT[$index]:-0}" "${DASHBOARD_PHASE_GATES[$index]:-pending pending pending pending}"
+      index=$((index + 1))
     done
   } > "$temporary"
   mv "$temporary" "$DASHBOARD_LIVE_FILE"
@@ -951,7 +981,7 @@ dashboard_state_init() {
   mkdir -p "$USAGE_DIR"
   local temporary="$DASHBOARD_PLAN_FILE.tmp.$$" row task_row
   local dash_phase_id dash_number dash_task_count dash_pending dash_depends dash_title
-  local dash_task_id dash_done dash_parallel dash_task_depends dash_task_title dash_status
+  local dash_task_id dash_done dash_parallel dash_task_depends dash_task_title dash_status dash_index
   {
     printf 'META\tplan\t%s\n' "$(dashboard_clean "$PLAN_ID")"
     printf 'META\tproject\t%s\n' "$(dashboard_clean "$(basename "$PROJECT")")"
@@ -970,12 +1000,14 @@ dashboard_state_init() {
         <<< "${row//$'\t'/$TSV_SEPARATOR}"
       [ "$dash_phase_id" = "phase_id" ] && continue
       if [ "$dash_pending" -eq 0 ]; then dash_status="document-complete"; else dash_status="pending"; fi
-      DASHBOARD_PHASE_STATUS["$dash_phase_id"]="$dash_status"
-      DASHBOARD_PHASE_ATTEMPT["$dash_phase_id"]="0"
+      dash_index="${#DASHBOARD_PHASE_IDS[@]}"
+      DASHBOARD_PHASE_IDS[$dash_index]="$dash_phase_id"
+      DASHBOARD_PHASE_STATUS[$dash_index]="$dash_status"
+      DASHBOARD_PHASE_ATTEMPT[$dash_index]="0"
       if [ "$dash_status" = "document-complete" ]; then
-        DASHBOARD_PHASE_GATES["$dash_phase_id"]="skip skip skip skip"
+        DASHBOARD_PHASE_GATES[$dash_index]="skip skip skip skip"
       else
-        DASHBOARD_PHASE_GATES["$dash_phase_id"]="pending pending pending pending"
+        DASHBOARD_PHASE_GATES[$dash_index]="pending pending pending pending"
       fi
       printf 'PHASE\t%s\t%s\t%s\n' "$dash_phase_id" "$dash_status" "$(dashboard_clean "$dash_title")"
       if [ "$dash_phase_id" = "$FINAL_PHASE_ID" ]; then
@@ -1003,11 +1035,13 @@ dashboard_state_init() {
 }
 
 dashboard_set_phase() {
-  local id="$1" status="$2" activity="$3" attempt_value="${4:-}"
-  DASHBOARD_PHASE_STATUS["$id"]="$status"
+  local id="$1" status="$2" activity="$3" attempt_value="${4:-}" phase_index
+  dashboard_ensure_phase_index "$id"
+  phase_index="$DASHBOARD_PHASE_INDEX"
+  DASHBOARD_PHASE_STATUS[$phase_index]="$status"
   DASHBOARD_PHASE="$id"
   DASHBOARD_ATTEMPT="$attempt_value"
-  [ -z "$attempt_value" ] || DASHBOARD_PHASE_ATTEMPT["$id"]="$attempt_value"
+  [ -z "$attempt_value" ] || DASHBOARD_PHASE_ATTEMPT[$phase_index]="$attempt_value"
   DASHBOARD_ACTIVITY="$activity"
   case "$status" in
     blocked|failed|paused|retry) DASHBOARD_REASON="$activity" ;;
@@ -1017,17 +1051,21 @@ dashboard_set_phase() {
 }
 
 dashboard_reset_gates() {
-  local id="$1"
-  DASHBOARD_PHASE_GATES["$id"]="pending pending pending pending"
+  local id="$1" phase_index
+  dashboard_ensure_phase_index "$id"
+  phase_index="$DASHBOARD_PHASE_INDEX"
+  DASHBOARD_PHASE_GATES[$phase_index]="pending pending pending pending"
   dashboard_write_live
 }
 
 dashboard_gate() {
-  local id="$1" index="$2" value="$3" activity="${4:-}"
+  local id="$1" index="$2" value="$3" activity="${4:-}" phase_index
   local -a gates
-  read -r -a gates <<< "${DASHBOARD_PHASE_GATES[$id]:-pending pending pending pending}"
+  dashboard_ensure_phase_index "$id"
+  phase_index="$DASHBOARD_PHASE_INDEX"
+  read -r -a gates <<< "${DASHBOARD_PHASE_GATES[$phase_index]:-pending pending pending pending}"
   gates[$index]="$value"
-  DASHBOARD_PHASE_GATES["$id"]="${gates[*]}"
+  DASHBOARD_PHASE_GATES[$phase_index]="${gates[*]}"
   [ -z "$activity" ] || DASHBOARD_ACTIVITY="$activity"
   dashboard_write_live
 }
@@ -1086,12 +1124,12 @@ cleanup_attempt_worktrees() {
 
 cleanup_runtime() {
   local path root exit_code=$?
-  for path in "${ACTIVE_WORKTREES[@]}"; do
+  for path in "${ACTIVE_WORKTREES[@]+"${ACTIVE_WORKTREES[@]}"}"; do
     if [ -d "$path" ]; then
       git -C "$PROJECT" worktree remove --force "$path" >/dev/null 2>&1 || true
     fi
   done
-  for root in "${ACTIVE_TEMP_ROOTS[@]}"; do
+  for root in "${ACTIVE_TEMP_ROOTS[@]+"${ACTIVE_TEMP_ROOTS[@]}"}"; do
     case "$root" in
       "${TMPDIR:-/tmp}"/rb-ralph-worktrees.*)
         [ ! -d "$root" ] || rm -rf -- "$root"
@@ -1108,8 +1146,10 @@ integrate_worktree_changes() {
   local snapshot="$1" temp_root="$2" patch_dir="$3"
   shift 3
   local task_id task_root task_patch integration combined changed changed_path task_overlap
+  local changed_path_index changed_path_owner_index existing_owner
   local integration_failed=0
-  local -A changed_path_owner=()
+  local -a changed_paths=()
+  local -a changed_path_owners=()
   mkdir -p "$patch_dir"
   integration="$temp_root/integration"
   create_execution_worktree "$snapshot" "$integration"
@@ -1128,13 +1168,24 @@ integrate_worktree_changes() {
     task_overlap=0
     while IFS= read -r changed_path; do
       [ -n "$changed_path" ] || continue
-      if [ -n "${changed_path_owner[$changed_path]:-}" ]; then
+      existing_owner=""
+      changed_path_index=0
+      while [ "$changed_path_index" -lt "${#changed_paths[@]}" ]; do
+        if [ "${changed_paths[$changed_path_index]}" = "$changed_path" ]; then
+          existing_owner="${changed_path_owners[$changed_path_index]}"
+          break
+        fi
+        changed_path_index=$((changed_path_index + 1))
+      done
+      if [ -n "$existing_owner" ]; then
         printf 'Tasks %s and %s both modify %s; parallel path overlap is prohibited.\n' \
-          "${changed_path_owner[$changed_path]}" "$task_id" "$changed_path" >> "$AGENT_LOG"
+          "$existing_owner" "$task_id" "$changed_path" >> "$AGENT_LOG"
         integration_failed=1
         task_overlap=1
       else
-        changed_path_owner["$changed_path"]="$task_id"
+        changed_path_owner_index="${#changed_paths[@]}"
+        changed_paths[$changed_path_owner_index]="$changed_path"
+        changed_path_owners[$changed_path_owner_index]="$task_id"
       fi
     done <<< "$changed"
     task_patch="$patch_dir/$task_id.patch"
@@ -1528,8 +1579,10 @@ done <<< "$RESOLVED"
 
 if [ "$LIST_ONLY" -eq 1 ]; then
   printf 'artifact_id\tpath\tsha256\n'
-  for index in "${!PLAN_IDS[@]}"; do
+  index=0
+  while [ "$index" -lt "${#PLAN_IDS[@]}" ]; do
     printf '%s\t%s\t%s\n' "${PLAN_IDS[$index]}" "${PLAN_PATHS[$index]}" "${PLAN_HASHES[$index]}"
+    index=$((index + 1))
   done
   exit 0
 fi
@@ -1538,19 +1591,23 @@ fi
 
 SELECTED=-1
 if [ -n "$PLAN_SELECTOR" ]; then
-  for index in "${!PLAN_IDS[@]}"; do
+  index=0
+  while [ "$index" -lt "${#PLAN_IDS[@]}" ]; do
     if [ "${PLAN_IDS[$index]}" = "$PLAN_SELECTOR" ] || [ "${PLAN_PATHS[$index]}" = "$PLAN_SELECTOR" ]; then
       SELECTED="$index"
       break
     fi
+    index=$((index + 1))
   done
   [ "$SELECTED" -ge 0 ] || die "Ready plan not found: $PLAN_SELECTOR"
 elif [ "${#PLAN_IDS[@]}" -eq 1 ]; then
   SELECTED=0
 else
   printf 'Multiple ready plans found; select one with --plan:\n' >&2
-  for index in "${!PLAN_IDS[@]}"; do
+  index=0
+  while [ "$index" -lt "${#PLAN_IDS[@]}" ]; do
     printf '  %s\t%s\n' "${PLAN_IDS[$index]}" "${PLAN_PATHS[$index]}" >&2
+    index=$((index + 1))
   done
   exit 1
 fi
@@ -1776,12 +1833,12 @@ while IFS= read -r tsv_row; do
   done <<< "$TASKS"
 
   pending_set=","
-  for task_id in "${PENDING_TASK_IDS[@]}"; do
+  for task_id in "${PENDING_TASK_IDS[@]+"${PENDING_TASK_IDS[@]}"}"; do
     pending_set+="$task_id,"
   done
-  for task_depends in "${PENDING_TASK_DEPS[@]}"; do
+  for task_depends in "${PENDING_TASK_DEPS[@]+"${PENDING_TASK_DEPS[@]}"}"; do
     IFS=',' read -r -a dependency_ids <<< "$task_depends"
-    for dependency_id in "${dependency_ids[@]}"; do
+    for dependency_id in "${dependency_ids[@]+"${dependency_ids[@]}"}"; do
       [ -z "$dependency_id" ] && continue
       if [[ "$pending_set" == *",$dependency_id,"* ]]; then
         all_pending_parallel=0
@@ -1865,7 +1922,7 @@ while IFS= read -r tsv_row; do
         ACTIVE_TEMP_ROOTS+=("$ATTEMPT_TEMP_ROOT")
         log "$phase_id isolation snapshot=$SNAPSHOT_COMMIT"
       fi
-      for task_id in "${PENDING_TASK_IDS[@]}"; do
+      for task_id in "${PENDING_TASK_IDS[@]+"${PENDING_TASK_IDS[@]}"}"; do
         TASK_FILE="$STATE_DIR/phases/$phase_id-$task_id.txt"
         TASK_PROMPT="$STATE_DIR/prompts/$phase_id-$task_id-attempt-$attempt-agent.txt"
         TASK_LOG="$STATE_DIR/logs/$phase_id-$task_id-attempt-$attempt-agent.log"
@@ -1883,7 +1940,7 @@ while IFS= read -r tsv_row; do
         batch_pids+=("$!")
         all_task_logs+=("$TASK_LOG")
         if [ "${#batch_pids[@]}" -ge "$PARALLEL_LIMIT" ]; then
-          for pid in "${batch_pids[@]}"; do
+          for pid in "${batch_pids[@]+"${batch_pids[@]}"}"; do
             if wait "$pid"; then
               :
             else
@@ -1894,7 +1951,7 @@ while IFS= read -r tsv_row; do
           batch_pids=()
         fi
       done
-      for pid in "${batch_pids[@]}"; do
+      for pid in "${batch_pids[@]+"${batch_pids[@]}"}"; do
         if wait "$pid"; then
           :
         else
@@ -1902,7 +1959,7 @@ while IFS= read -r tsv_row; do
           if [ "$wait_rc" -eq 75 ]; then agent_rc=75; elif [ "$agent_rc" -eq 0 ]; then agent_rc="$wait_rc"; fi
         fi
       done
-      for task_log in "${all_task_logs[@]}"; do
+      for task_log in "${all_task_logs[@]+"${all_task_logs[@]}"}"; do
         printf '\n--- %s ---\n' "$(basename "$task_log")" >> "$AGENT_LOG"
         cat "$task_log" >> "$AGENT_LOG"
       done
@@ -1945,7 +2002,8 @@ while IFS= read -r tsv_row; do
         mv "$rate_telemetry" "$USAGE_DIR/$phase_id-attempt-$attempt-rate-limit-$rate_limit_waits-agent.usage.json"
       fi
       if [ -n "$ATTEMPT_TEMP_ROOT" ]; then
-        cleanup_attempt_worktrees "$ATTEMPT_TEMP_ROOT" "${ATTEMPT_WORKTREES[@]}"
+        cleanup_attempt_worktrees "$ATTEMPT_TEMP_ROOT" \
+          "${ATTEMPT_WORKTREES[@]+"${ATTEMPT_WORKTREES[@]}"}"
       fi
       sleep "$wait_seconds"
       phase_run_attempts=$((phase_run_attempts - 1))
@@ -1954,14 +2012,16 @@ while IFS= read -r tsv_row; do
 
     if [ "$use_parallel" -eq 1 ] && [ "$ISOLATION" = "worktree" ]; then
       PATCH_DIR="$STATE_DIR/patches/$phase_id-attempt-$attempt"
-      if ! integrate_worktree_changes "$SNAPSHOT_COMMIT" "$ATTEMPT_TEMP_ROOT" "$PATCH_DIR" "${WORKTREE_PATCH_ARGS[@]}"; then
+      if ! integrate_worktree_changes "$SNAPSHOT_COMMIT" "$ATTEMPT_TEMP_ROOT" "$PATCH_DIR" \
+        "${WORKTREE_PATCH_ARGS[@]+"${WORKTREE_PATCH_ARGS[@]}"}"; then
         agent_rc=1
         log "$phase_id isolated task patch integration failed; primary working tree unchanged"
       else
         log "$phase_id isolated task patches integrated into primary working tree"
       fi
       ATTEMPT_WORKTREES+=("$ATTEMPT_TEMP_ROOT/integration")
-      cleanup_attempt_worktrees "$ATTEMPT_TEMP_ROOT" "${ATTEMPT_WORKTREES[@]}"
+      cleanup_attempt_worktrees "$ATTEMPT_TEMP_ROOT" \
+        "${ATTEMPT_WORKTREES[@]+"${ATTEMPT_WORKTREES[@]}"}"
     fi
 
     if [ "$agent_rc" -eq 0 ]; then

@@ -137,6 +137,25 @@ run_role_project() {
     "$RALPH" --project "$project" --validation-mode manager --max-attempts 1 "$@"
 }
 
+# The macOS system shell is Bash 3.2. Keep every shipped runtime entry point
+# free of Bash 4-only associative arrays, even when tests run on newer Bash.
+RUNTIME_SHELL_FILES=(
+  "$PACKAGE_ROOT/bin/rb-ralph"
+  "$PACKAGE_ROOT/bin/rb-ralph-watch"
+  "$PACKAGE_ROOT/adapters/adapter-utils.sh"
+  "$PACKAGE_ROOT/adapters/claude.sh"
+  "$PACKAGE_ROOT/adapters/codex.sh"
+  "$PACKAGE_ROOT/adapters/opencode.sh"
+  "$PACKAGE_ROOT/install.sh"
+  "$PACKAGE_ROOT/rb-ralph.sh"
+  "$PACKAGE_ROOT/rb-ralph-watch.sh"
+  "$PACKAGE_ROOT/uninstall.sh"
+)
+if grep -n -E '(^|[[:space:]])(declare|local)[[:space:]]+-A' "${RUNTIME_SHELL_FILES[@]}"; then
+  fail "runtime shell scripts require associative arrays unavailable in Bash 3.2"
+fi
+ok "runtime shell scripts avoid Bash 4 associative arrays"
+
 # 1. The source runner works through its real path without relying on cwd.
 REAL_PROJECT="$(new_project real-path)"
 (cd / && "$RALPH" --project "$REAL_PROJECT" --list) > "$TEMP_ROOT/real-path.out"
@@ -173,16 +192,22 @@ ok "temporary-prefix installation keeps launcher and auxiliary resources togethe
 "$RALPH" --ver > "$TEMP_ROOT/source-version.out"
 "$INSTALL_PREFIX/bin/rb-ralph" --version > "$TEMP_ROOT/installed-version.out"
 "$INSTALL_PREFIX/bin/rb-ralph" --help > "$TEMP_ROOT/installed-help.out"
-assert_contains "$TEMP_ROOT/source-version.out" "RB Ralph 0.5.1" "source runner reports its package version"
-assert_contains "$TEMP_ROOT/installed-version.out" "RB Ralph 0.5.1" "installed runner reports the same package version"
-assert_contains "$TEMP_ROOT/install.out" "RB Ralph 0.5.1 installed" "installer reports the installed version"
+assert_contains "$TEMP_ROOT/source-version.out" "RB Ralph 0.5.2" "source runner reports its package version"
+assert_contains "$TEMP_ROOT/installed-version.out" "RB Ralph 0.5.2" "installed runner reports the same package version"
+assert_contains "$TEMP_ROOT/install.out" "RB Ralph 0.5.2 installed" "installer reports the installed version"
 assert_contains "$TEMP_ROOT/installed-help.out" "--splash" "installed runner exposes the animated splash flag"
+assert_contains "$PACKAGE_ROOT/bin/rb-ralph" '╰──◡◡──╯          RALPH · capivara de plantão' \
+  "static brand preserves Ralph the capybara"
+assert_contains "$PACKAGE_ROOT/lib/dashboard.cjs" '╰──◡◡──╯${" ".repeat(10)}RALPH · capivara de plantão' \
+  "wide dashboard preserves Ralph the capybara"
 node -e '
   const { compose } = require(process.argv[1]);
-  const frame = compose("0.5.1", 100).join("\n");
-  if (!frame.includes("v0.5.1") || !frame.includes("RALPH · capivara de plantão")) process.exit(1);
+  const frame = compose("0.5.2", 100).join("\n");
+  const capybara = ["◕                    ◕", "▪      ▪", "◡◡"];
+  if (!frame.includes("v0.5.2") || !frame.includes("RALPH · capivara de plantão") ||
+      !capybara.every((feature) => frame.includes(feature))) process.exit(1);
 ' "$INSTALL_PREFIX/libexec/rb-ralph/lib/splash.cjs"
-ok "installed splash renders the versioned RB Ralph identity"
+ok "installed splash preserves the versioned Ralph capybara"
 SPACE_PROJECT="$(new_project 'project with spaces')"
 (cd / && "$INSTALL_PREFIX/bin/rb-ralph" --project "$SPACE_PROJECT" --list) > "$TEMP_ROOT/spaces.out"
 assert_contains "$TEMP_ROOT/spaces.out" "init-minimal-execution" "installed layout supports paths containing spaces"
@@ -933,7 +958,7 @@ assert_contains "$TEMP_ROOT/dashboard.out" "codex[priced-model] executor / codex
   "dashboard identifies the effective model for each role"
 assert_contains "$TEMP_ROOT/dashboard.out" "RALPH · capivara de plantão" \
   "wide dashboard renders the RB Ralph mascot"
-assert_contains "$TEMP_ROOT/dashboard.out" "v0.5.1" \
+assert_contains "$TEMP_ROOT/dashboard.out" "v0.5.2" \
   "dashboard identifies the running RB Ralph version"
 assert_contains "$TEMP_ROOT/dashboard.out" "LOG RECENTE · GERENTE" \
   "dashboard shows the current role in a compact recent-log panel"

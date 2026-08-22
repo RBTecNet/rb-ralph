@@ -18,6 +18,11 @@ contract for clean-room product acceptance.
 
 ## Installation
 
+The runtime supports Bash 3.2 or newer, including the Bash version bundled
+with macOS. It deliberately avoids Bash 4-only features such as associative
+arrays. Node.js, Git, and the CLIs selected as agent or manager providers must
+also be available on the machine.
+
 ### Current user, without sudo
 
 From the cloned `rb-ralph` directory:
@@ -119,7 +124,7 @@ Confirm the exact source or installed build at any time with:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.5.1
+# RB Ralph 0.5.2
 ```
 
 The installer prints and copies the same `VERSION` marker, so a source upgrade
