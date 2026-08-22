@@ -33,6 +33,12 @@ assert_contains() {
   ok "$message"
 }
 
+assert_not_contains() {
+  local file="$1" unexpected="$2" message="$3"
+  ! grep -Fq "$unexpected" "$file" || fail "$message"
+  ok "$message"
+}
+
 assert_eq() {
   local expected="$1" actual="$2" message="$3"
   [ "$expected" = "$actual" ] || fail "$message (expected=$expected actual=$actual)"
@@ -286,6 +292,14 @@ elif [ "$count" -eq 2 ]; then
     'RB_RALPH_FINDING: AC-T001-01 | consumer version boundary | exit zero and version 0.1.0 | second independent defect | canonical consumer probe' \
     'RB_RALPH_DECISION: RETRY' \
     'RB_RALPH_REASON: complete two-finding batch'
+elif [ "$count" -eq 3 ]; then
+  printf '%s\n' \
+    'RB_RALPH_AUDIT_STATUS: COMPLETE' \
+    'RB_RALPH_CRITERION: T001 | PASS | the task implementation boundary is now complete' \
+    'RB_RALPH_CRITERION: AC-T001-01 | FAIL | version behavior remains unproven' \
+    'RB_RALPH_FINDING: AC-T001-01 | consumer version boundary | exit zero and version 0.1.0 | second independent defect persists after repair | updated canonical consumer probe' \
+    'RB_RALPH_DECISION: RETRY' \
+    'RB_RALPH_REASON: one current finding remains after the first repair'
 else
   printf '%s\n' \
     'RB_RALPH_AUDIT_STATUS: COMPLETE' \
@@ -306,24 +320,38 @@ RB_RALPH_EXECUTION_UNIT=task RB_RALPH_MANAGER_AUDIT_MODE=exhaustive \
   --manager-retries 2 --manager-retry-wait 0 \
   --agent-cmd "$TEMP_ROOT/exhaustive-agent" --manager-cmd "$TEMP_ROOT/exhaustive-manager" \
   > "$TEMP_ROOT/exhaustive.out"
-assert_eq "2" "$(cat "$MOCK_STATE/exhaustive-agent.count")" \
+assert_eq "3" "$(cat "$MOCK_STATE/exhaustive-agent.count")" \
   "incomplete audit matrix does not consume an executor repair attempt"
-assert_eq "3" "$(cat "$MOCK_STATE/exhaustive-manager.count")" \
+assert_eq "4" "$(cat "$MOCK_STATE/exhaustive-manager.count")" \
   "manager completes the missing matrix over the same evidence before repair"
 assert_contains "$MOCK_STATE/exhaustive-agent-2.prompt" 'first independent defect' \
   "next executor receives the first finding in the exhaustive batch"
 assert_contains "$MOCK_STATE/exhaustive-agent-2.prompt" 'second independent defect' \
   "next executor receives the second finding in the exhaustive batch"
+assert_not_contains "$MOCK_STATE/exhaustive-agent-3.prompt" 'first independent defect' \
+  "a finding omitted from the next complete batch closes before another executor call"
+assert_contains "$MOCK_STATE/exhaustive-agent-3.prompt" 'second independent defect persists after repair' \
+  "an unresolved finding remains open with its latest exhaustive evidence"
 EXHAUSTIVE_RUN="$(basename "$(find "$EXHAUSTIVE_PROJECT/.rb/runs" -mindepth 1 -maxdepth 1 -type d -print -quit)")"
 RB_RALPH_WATCH_COLS=118 RB_RALPH_WATCH_LINES=45 \
   "$ROOT/bin/rb-ralph-watch" --project "$EXHAUSTIVE_PROJECT" --run "$EXHAUSTIVE_RUN" \
   --once --no-color > "$TEMP_ROOT/exhaustive-dashboard.out"
 assert_contains "$TEMP_ROOT/exhaustive-dashboard.out" 'total=2 open=0 resolved=2' \
   "dashboard exposes cumulative open and resolved finding counts"
-if [ "$(find "$EXHAUSTIVE_PROJECT/.rb/runs/$EXHAUSTIVE_RUN/logs" -name '*manager*-audit.json' -type f | wc -l | tr -d ' ')" -lt 3 ]; then
+if [ "$(find "$EXHAUSTIVE_PROJECT/.rb/runs/$EXHAUSTIVE_RUN/logs" -name '*manager*-audit.json' -type f | wc -l | tr -d ' ')" -lt 4 ]; then
   fail "manager audit completion reports were not preserved for every review call"
 fi
 ok "manager audit completion reports remain canonical evidence"
+EXHAUSTIVE_FINDINGS="$EXHAUSTIVE_PROJECT/.rb/runs/$EXHAUSTIVE_RUN/findings.tsv"
+node "$ROOT/lib/manager-audit.cjs" replay "$EXHAUSTIVE_FINDINGS" \
+  "$EXHAUSTIVE_PROJECT/.rb/runs/$EXHAUSTIVE_RUN/logs" \
+  "$EXHAUSTIVE_PROJECT/.rb/runs/$EXHAUSTIVE_RUN/prompts" >/dev/null
+EXHAUSTIVE_REPLAY_SHA="$(node -e 'const f=require("node:fs"),c=require("node:crypto");process.stdout.write(c.createHash("sha256").update(f.readFileSync(process.argv[1])).digest("hex"))' "$EXHAUSTIVE_FINDINGS")"
+node "$ROOT/lib/manager-audit.cjs" replay "$EXHAUSTIVE_FINDINGS" \
+  "$EXHAUSTIVE_PROJECT/.rb/runs/$EXHAUSTIVE_RUN/logs" \
+  "$EXHAUSTIVE_PROJECT/.rb/runs/$EXHAUSTIVE_RUN/prompts" >/dev/null
+assert_eq "$EXHAUSTIVE_REPLAY_SHA" "$(node -e 'const f=require("node:fs"),c=require("node:crypto");process.stdout.write(c.createHash("sha256").update(f.readFileSync(process.argv[1])).digest("hex"))' "$EXHAUSTIVE_FINDINGS")" \
+  "replaying canonical manager audits is idempotent across repeated resumes"
 
 printf '0\n' > "$MOCK_STATE/agent-count"
 ECHOED_PROTOCOL_PROJECT="$(new_project echoed-protocol-project)"

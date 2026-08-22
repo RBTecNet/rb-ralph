@@ -581,35 +581,31 @@ record_finding() {
     suffix=$((suffix + 1))
     finding_id="${base_id}-$(printf '%02d' "$suffix")"
   done
-  printf '%s\t%s\t%s\topen\t%s\t%s\t\t\n' \
-    "$finding_id" "$phase" "$attempt" "$reason" "$fingerprint" >> "$FINDINGS_FILE"
+  printf '%s\t%s\t%s\topen\t%s\t%s\t\t\t\t\t%s\t%s\t%s\n' \
+    "$finding_id" "$phase" "$attempt" "$reason" "$fingerprint" \
+    "$reason" "$fingerprint" "$attempt" >> "$FINDINGS_FILE"
 }
 
 record_manager_findings() {
   local phase="$1" attempt="$2" report="$3" evidence_fingerprint="$4" fallback="$5"
-  local structured=0 finding_line finding_hash
   if [ -s "$report" ]; then
-    while IFS= read -r finding_line; do
-      [ -n "$finding_line" ] || continue
-      structured=1
-      finding_hash="$(printf '%s' "$finding_line" | node -e 'const c=require("node:crypto");let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(c.createHash("sha256").update(s).digest("hex")))')"
-      record_finding "$phase" "$attempt" "$finding_line" "${evidence_fingerprint}:${finding_hash}"
-    done < <(node -e '
-      const report=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8"));
-      for (const finding of report.findings ?? []) {
-        const value = `${finding.criteria}: ${finding.observed}; expected ${finding.expected}; boundary ${finding.boundary}; evidence ${finding.evidence}`;
-        process.stdout.write(value.replace(/[\t\r\n]+/g," ")+"\n");
-      }
-    ' "$report")
+    node "$MANAGER_AUDIT_HELPER" reconcile "$FINDINGS_FILE" "$report" \
+      "$phase" "$attempt" "$evidence_fingerprint" >/dev/null \
+      || die "$phase could not reconcile the exhaustive manager finding batch"
+  else
+    record_finding "$phase" "$attempt" "$fallback" "$evidence_fingerprint"
   fi
-  [ "$structured" -eq 1 ] || record_finding "$phase" "$attempt" "$fallback" "$evidence_fingerprint"
 }
 
 open_findings() {
   local phase="$1"
   [ -f "$FINDINGS_FILE" ] || return 0
   awk -F '\t' -v phase="$phase" \
-    '$2 == phase && $4 == "open" { printf "- %s (attempt %s): %s\n", $1, $3, $5 }' \
+    '$2 == phase && $4 == "open" {
+      latest=($13 == "" ? $3 : $13); reason=($11 == "" ? $5 : $11)
+      if (latest == $3) printf "- %s (attempt %s): %s\n", $1, $3, reason
+      else printf "- %s (attempt %s, last seen %s): %s\n", $1, $3, latest, reason
+    }' \
     "$FINDINGS_FILE"
 }
 
@@ -1824,8 +1820,10 @@ if [ ! -f "$EVENTS_FILE" ]; then
   printf 'timestamp\tphase_id\tattempt\tstatus\treason\n' > "$EVENTS_FILE"
 fi
 if [ ! -f "$FINDINGS_FILE" ]; then
-  printf 'finding_id\tphase_id\topened_attempt\tstatus\treason\topened_evidence_sha256\tresolved_attempt\tresolved_evidence_sha256\n' > "$FINDINGS_FILE"
+  printf 'finding_id\tphase_id\topened_attempt\tstatus\treason\topened_evidence_sha256\tresolved_attempt\tresolved_evidence_sha256\tfinding_key\tcriteria\tlatest_reason\tlatest_evidence_sha256\tlast_seen_attempt\n' > "$FINDINGS_FILE"
 fi
+node "$MANAGER_AUDIT_HELPER" replay "$FINDINGS_FILE" "$STATE_DIR/logs" "$STATE_DIR/prompts" >/dev/null \
+  || die "Could not migrate and reconcile the cumulative finding ledger"
 
 [ -f "$TELEMETRY_HELPER" ] || die "RB Ralph telemetry helper not found: $TELEMETRY_HELPER; reinstall the complete package"
 [ -f "$USAGE_HELPER" ] || die "RB Ralph usage helper not found: $USAGE_HELPER; reinstall the complete package"
@@ -2360,6 +2358,7 @@ while IFS= read -r tsv_row; do
         '' \
         'Use COMPLETE only when every task and criterion is evidenced.' \
         'For RETRY, emit one RB_RALPH_FINDING row for every FAIL or UNPROVEN criterion and include all defects observable from the current evidence, including independent defects in unrelated criteria.' \
+        'The structured finding rows are the complete current snapshot. Repeat an unresolved finding in every RETRY batch. Omitting a prior finding claims it is resolved by the current changed evidence; Ralph keeps it open when the canonical evidence fingerprint did not change.' \
         'Findings are cumulative across retries. COMPLETE means every open finding below is resolved by current code or canonical evidence; a new reason never erases an older one.' \
         'Use RETRY when another implementation attempt can reasonably fix the result. Implementation defects, test failures, incomplete criteria, and incorrect technical approaches are RETRY, never BLOCKED.' \
         'When AGENT_TIMED_OUT is 1, inspect all partial evidence, return RETRY, and give the next executor a concrete recovery strategy that avoids the stalled command or approach. An executor timeout is recoverable and must not be treated as a terminal implementation failure.' \

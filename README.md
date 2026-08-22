@@ -124,7 +124,7 @@ Confirm the exact source or installed build at any time with:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.5.3
+# RB Ralph 0.5.4
 ```
 
 The installer prints and copies the same `VERSION` marker, so a source upgrade
@@ -359,10 +359,12 @@ Codex caches or from the monorepo's internal layout participates in discovery.
 - Resumes phases already accepted by the manager for the same plan hash.
 - Supports progress-aware implementation retries, strategy recovery, a hard
   per-invocation cap, and resumable circuit-breaker pauses.
-- Persists a cumulative finding ledger. Every manager RETRY remains open across
-  later attempts until a COMPLETE decision resolves it against the current
-  changed-path and validation fingerprint; newer feedback never erases older
-  findings.
+- Persists a cumulative, evidence-bound finding ledger. Each exhaustive RETRY
+  batch is the complete current snapshot: repeated findings stay open with
+  their latest evidence, findings absent after a changed canonical fingerprint
+  close individually, and a later regression creates a new auditable opening.
+  Legacy ledgers are migrated and replayed from preserved manager audits when a
+  run resumes, so an upgrade does not resend already-resolved work.
 - Detects built-in-provider turns that exit successfully with no workspace
   delta and no completed final-response marker. Those incomplete turns receive
   bounded executor-only retries and never spend a manager review or logical
@@ -519,8 +521,14 @@ Every task and acceptance-criterion ID must appear exactly once with `PASS`,
 `FAIL`, `UNPROVEN`, `HUMAN_PENDING`, or `NOT_APPLICABLE`. Missing rows trigger a
 manager-only completion retry over the same executor evidence. `RETRY` requires
 a structured finding for every failed or unproven row. `COMPLETE` is accepted
-only when every row passes or is demonstrably not applicable. The explicit
-compatibility mode `--manager-audit legacy` accepts the older two-line response.
+only when every row passes or is demonstrably not applicable. Every RETRY must
+repeat every still-observable structured finding. Omission closes an older
+finding only when the canonical evidence fingerprint changed; unchanged
+evidence cannot silently reinterpret a failure as success. Finding identities
+are derived from criteria, boundary, and expected behavior, while the latest
+observed failure and evidence remain current in the executor prompt. The
+explicit compatibility mode `--manager-audit legacy` accepts the older
+two-line response.
 
 `RETRY` and `BLOCKED` are the other valid decisions. Adapters own CLI-specific
 arguments, models, permissions, authentication, and output normalization, so
