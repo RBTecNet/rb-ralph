@@ -588,7 +588,11 @@ record_finding() {
 
 record_manager_findings() {
   local phase="$1" attempt="$2" report="$3" evidence_fingerprint="$4" fallback="$5"
+  local report_decision=""
   if [ -s "$report" ]; then
+    report_decision="$(node -e 'const r=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(r.decision??"")' "$report")"
+  fi
+  if [ "$report_decision" = "RETRY" ]; then
     node "$MANAGER_AUDIT_HELPER" reconcile "$FINDINGS_FILE" "$report" \
       "$phase" "$attempt" "$evidence_fingerprint" >/dev/null \
       || die "$phase could not reconcile the exhaustive manager finding batch"
@@ -702,10 +706,26 @@ last_phase_reason() {
 
 next_phase_attempt() {
   local phase="$1"
-  awk -F '\t' -v phase="$phase" '
-    $2 == phase && $3 ~ /^[0-9]+$/ { if (($3 + 0) > maximum) maximum=$3 + 0 }
-    END { print maximum + 1 }
-  ' "$EVENTS_FILE"
+  node -e '
+    const fs=require("node:fs"), path=require("node:path");
+    const [eventsPath,stateDirectory,phase]=process.argv.slice(1);
+    let maximum=0;
+    for (const line of fs.readFileSync(eventsPath,"utf8").split(/\r?\n/)) {
+      const fields=line.split("\t");
+      if (fields[1] === phase && /^\d+$/.test(fields[2] ?? "")) maximum=Math.max(maximum,Number(fields[2]));
+    }
+    const escaped=phase.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+    const pattern=new RegExp(`^${escaped}(?:-.+)?-attempt-(\\d+)(?:-|\\.)`);
+    for (const directory of ["prompts","logs","evidence"]) {
+      let names=[];
+      try { names=fs.readdirSync(path.join(stateDirectory,directory)); } catch {}
+      for (const name of names) {
+        const match=pattern.exec(name);
+        if (match) maximum=Math.max(maximum,Number(match[1]));
+      }
+    }
+    process.stdout.write(String(maximum+1));
+  ' "$EVENTS_FILE" "$STATE_DIR" "$phase"
 }
 
 last_phase_retry_reason() {

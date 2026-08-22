@@ -6,6 +6,7 @@ RALPH="$PACKAGE_ROOT/bin/rb-ralph"
 INSTALL_ENTRY="$PACKAGE_ROOT/rb-ralph.sh"
 CORE="$PACKAGE_ROOT/core/rb-harness.cjs"
 MINIMAL_FIXTURE="$PACKAGE_ROOT/tests/fixtures/execution/valid/minimal/PHASES.md"
+PACKAGE_VERSION="$(tr -d '\r\n' < "$PACKAGE_ROOT/VERSION")"
 TEMP_ROOT="$(mktemp -d)"
 trap 'rm -rf -- "$TEMP_ROOT"' EXIT
 
@@ -199,9 +200,9 @@ ok "temporary-prefix installation keeps launcher and auxiliary resources togethe
 "$RALPH" --ver > "$TEMP_ROOT/source-version.out"
 "$INSTALL_PREFIX/bin/rb-ralph" --version > "$TEMP_ROOT/installed-version.out"
 "$INSTALL_PREFIX/bin/rb-ralph" --help > "$TEMP_ROOT/installed-help.out"
-assert_contains "$TEMP_ROOT/source-version.out" "RB Ralph 0.5.3" "source runner reports its package version"
-assert_contains "$TEMP_ROOT/installed-version.out" "RB Ralph 0.5.3" "installed runner reports the same package version"
-assert_contains "$TEMP_ROOT/install.out" "RB Ralph 0.5.3 installed" "installer reports the installed version"
+assert_contains "$TEMP_ROOT/source-version.out" "RB Ralph $PACKAGE_VERSION" "source runner reports its package version"
+assert_contains "$TEMP_ROOT/installed-version.out" "RB Ralph $PACKAGE_VERSION" "installed runner reports the same package version"
+assert_contains "$TEMP_ROOT/install.out" "RB Ralph $PACKAGE_VERSION installed" "installer reports the installed version"
 assert_contains "$TEMP_ROOT/installed-help.out" "--splash" "installed runner exposes the animated splash flag"
 assert_contains "$PACKAGE_ROOT/bin/rb-ralph" '╰──◡◡──╯          RALPH · capivara de plantão' \
   "static brand preserves Ralph the capybara"
@@ -209,11 +210,11 @@ assert_contains "$PACKAGE_ROOT/lib/dashboard.cjs" '╰──◡◡──╯${" "
   "wide dashboard preserves Ralph the capybara"
 node -e '
   const { compose } = require(process.argv[1]);
-  const frame = compose("0.5.3", 100).join("\n");
+  const frame = compose(process.argv[2], 100).join("\n");
   const capybara = ["◕                    ◕", "▪      ▪", "◡◡"];
-  if (!frame.includes("v0.5.3") || !frame.includes("RALPH · capivara de plantão") ||
+  if (!frame.includes(`v${process.argv[2]}`) || !frame.includes("RALPH · capivara de plantão") ||
       !capybara.every((feature) => frame.includes(feature))) process.exit(1);
-' "$INSTALL_PREFIX/libexec/rb-ralph/lib/splash.cjs"
+' "$INSTALL_PREFIX/libexec/rb-ralph/lib/splash.cjs" "$PACKAGE_VERSION"
 ok "installed splash preserves the versioned Ralph capybara"
 SPACE_PROJECT="$(new_project 'project with spaces')"
 (cd / && "$INSTALL_PREFIX/bin/rb-ralph" --project "$SPACE_PROJECT" --list) > "$TEMP_ROOT/spaces.out"
@@ -987,7 +988,7 @@ assert_contains "$TEMP_ROOT/dashboard.out" "codex[priced-model] executor / codex
   "dashboard identifies the effective model for each role"
 assert_contains "$TEMP_ROOT/dashboard.out" "RALPH · capivara de plantão" \
   "wide dashboard renders the RB Ralph mascot"
-assert_contains "$TEMP_ROOT/dashboard.out" "v0.5.3" \
+assert_contains "$TEMP_ROOT/dashboard.out" "v$PACKAGE_VERSION" \
   "dashboard identifies the running RB Ralph version"
 assert_contains "$TEMP_ROOT/dashboard.out" "LOG RECENTE · GERENTE" \
   "dashboard shows the current role in a compact recent-log panel"

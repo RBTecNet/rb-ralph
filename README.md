@@ -124,7 +124,7 @@ Confirm the exact source or installed build at any time with:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.5.4
+# RB Ralph 0.5.5
 ```
 
 The installer prints and copies the same `VERSION` marker, so a source upgrade
@@ -357,6 +357,10 @@ Codex caches or from the monorepo's internal layout participates in discovery.
   orchestrator artifacts are integrity-checked so an executor cannot silently
   rewrite prompts, logs, events, validations, or prior evidence.
 - Resumes phases already accepted by the manager for the same plan hash.
+- Preserves artifacts from an interrupted provider call and advances to a new
+  durable attempt number on resume, even when the interruption happened before
+  an event row was recorded. Reusing a canonical prompt/log name can therefore
+  never masquerade as executor control-plane tampering.
 - Supports progress-aware implementation retries, strategy recovery, a hard
   per-invocation cap, and resumable circuit-breaker pauses.
 - Persists a cumulative, evidence-bound finding ledger. Each exhaustive RETRY
@@ -527,8 +531,13 @@ finding only when the canonical evidence fingerprint changed; unchanged
 evidence cannot silently reinterpret a failure as success. Finding identities
 are derived from criteria, boundary, and expected behavior, while the latest
 observed failure and evidence remain current in the executor prompt. The
-explicit compatibility mode `--manager-audit legacy` accepts the older
-two-line response.
+  explicit compatibility mode `--manager-audit legacy` accepts the older
+  two-line response.
+
+If an orchestrator-owned gate converts a manager `COMPLETE` into `RETRY` (for
+example, a nonzero executor exit or deterministic validation failure), Ralph
+records the orchestrator reason as a fallback finding. It does not feed a
+finding-free `COMPLETE` report into the structured RETRY reconciler.
 
 `RETRY` and `BLOCKED` are the other valid decisions. Adapters own CLI-specific
 arguments, models, permissions, authentication, and output normalization, so

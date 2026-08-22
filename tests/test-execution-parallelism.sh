@@ -255,6 +255,25 @@ assert_contains "$MOCK_STATE/fresh-task-calls" 'T003' "second sequential task ha
 assert_contains "$MOCK_STATE/fresh-task-T002.prompt" 'Implement only the task below in this fresh execution context' \
   "fresh task prompt uses the bounded task extract as authority"
 
+# An interrupted attempt can leave canonical prompt/log names without an event.
+# Resume must preserve those artifacts and advance the durable attempt number.
+INTERRUPTED_PROJECT="$TEMP_ROOT/interrupted-attempt-project"
+mkdir -p "$INTERRUPTED_PROJECT/.rb/features/example"
+node "$CLI" project init "$INTERRUPTED_PROJECT" --name interrupted --id interrupted >/dev/null
+cp "$MINIMAL_FIXTURE" "$INTERRUPTED_PROJECT/.rb/features/example/PHASES.md"
+node "$CLI" manifest sync "$INTERRUPTED_PROJECT" >/dev/null
+INTERRUPTED_HASH="$(node -e 'const f=require("node:fs"),c=require("node:crypto");process.stdout.write(c.createHash("sha256").update(f.readFileSync(process.argv[1])).digest("hex").slice(0,12))' "$INTERRUPTED_PROJECT/.rb/features/example/PHASES.md")"
+INTERRUPTED_RUN="$INTERRUPTED_PROJECT/.rb/runs/init-minimal-execution-$INTERRUPTED_HASH"
+mkdir -p "$INTERRUPTED_RUN/prompts"
+printf 'preserved interrupted prompt\n' > "$INTERRUPTED_RUN/prompts/P01-attempt-1-agent.txt"
+"$RALPH" --project "$INTERRUPTED_PROJECT" --validation-mode manager \
+  --agent-cmd "$TEMP_ROOT/mock-agent" --manager-cmd "$TEMP_ROOT/mock-manager" \
+  > "$TEMP_ROOT/interrupted-attempt.out"
+assert_contains "$INTERRUPTED_RUN/events.tsv" $'P01\t2\tCOMPLETE\t' \
+  "resume advances past artifact-only interrupted attempt numbers"
+assert_contains "$INTERRUPTED_RUN/prompts/P01-attempt-1-agent.txt" 'preserved interrupted prompt' \
+  "resume preserves interrupted attempt artifacts instead of overwriting them"
+
 # An incomplete manager matrix consumes only a manager-completion retry. The
 # valid retry returns every observable finding as one batch to the next agent.
 cat > "$TEMP_ROOT/exhaustive-agent" <<'EXHAUSTIVE_AGENT'
@@ -352,6 +371,47 @@ node "$ROOT/lib/manager-audit.cjs" replay "$EXHAUSTIVE_FINDINGS" \
   "$EXHAUSTIVE_PROJECT/.rb/runs/$EXHAUSTIVE_RUN/prompts" >/dev/null
 assert_eq "$EXHAUSTIVE_REPLAY_SHA" "$(node -e 'const f=require("node:fs"),c=require("node:crypto");process.stdout.write(c.createHash("sha256").update(f.readFileSync(process.argv[1])).digest("hex"))' "$EXHAUSTIVE_FINDINGS")" \
   "replaying canonical manager audits is idempotent across repeated resumes"
+
+# An exhaustive manager can report COMPLETE while an orchestrator-owned gate
+# forces RETRY. That override must become a fallback finding, not be passed to
+# the structured RETRY reconciler as though the manager emitted findings.
+cat > "$TEMP_ROOT/override-agent" <<'OVERRIDE_AGENT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > "$MOCK_STATE/override-agent-${RB_RALPH_ATTEMPT:?}.prompt"
+count=0
+[ ! -f "$MOCK_STATE/override-agent.count" ] || count="$(cat "$MOCK_STATE/override-agent.count")"
+count=$((count + 1))
+printf '%s\n' "$count" > "$MOCK_STATE/override-agent.count"
+mkdir -p src
+printf 'attempt=%s\n' "$RB_RALPH_ATTEMPT" > src/override.txt
+[ "$count" -gt 1 ]
+OVERRIDE_AGENT
+cat > "$TEMP_ROOT/override-manager" <<'OVERRIDE_MANAGER'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > /dev/null
+printf '%s\n' \
+  'RB_RALPH_AUDIT_STATUS: COMPLETE' \
+  'RB_RALPH_CRITERION: T001 | PASS | current source exists' \
+  'RB_RALPH_CRITERION: AC-T001-01 | PASS | consumer evidence is present' \
+  'RB_RALPH_DECISION: COMPLETE' \
+  'RB_RALPH_REASON: manager evidence is complete'
+OVERRIDE_MANAGER
+chmod +x "$TEMP_ROOT/override-agent" "$TEMP_ROOT/override-manager"
+OVERRIDE_PROJECT="$TEMP_ROOT/exhaustive-override-project"
+mkdir -p "$OVERRIDE_PROJECT/.rb/features/example"
+node "$CLI" project init "$OVERRIDE_PROJECT" --name override --id override >/dev/null
+cp "$MINIMAL_FIXTURE" "$OVERRIDE_PROJECT/.rb/features/example/PHASES.md"
+node "$CLI" manifest sync "$OVERRIDE_PROJECT" >/dev/null
+RB_RALPH_EXECUTION_UNIT=task RB_RALPH_MANAGER_AUDIT_MODE=exhaustive \
+  "$RALPH" --project "$OVERRIDE_PROJECT" --validation-mode manager \
+  --agent-cmd "$TEMP_ROOT/override-agent" --manager-cmd "$TEMP_ROOT/override-manager" \
+  > "$TEMP_ROOT/exhaustive-override.out"
+assert_eq "2" "$(cat "$MOCK_STATE/override-agent.count")" \
+  "orchestrator RETRY override does not fail structured finding reconciliation"
+assert_contains "$MOCK_STATE/override-agent-2.prompt" 'implementation agent or isolated integration exited with 1' \
+  "orchestrator override reaches the next executor as a fallback finding"
 
 printf '0\n' > "$MOCK_STATE/agent-count"
 ECHOED_PROTOCOL_PROJECT="$(new_project echoed-protocol-project)"
