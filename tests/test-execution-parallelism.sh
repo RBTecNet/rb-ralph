@@ -12,6 +12,8 @@ trap 'rm -rf "$TEMP_ROOT"' EXIT
 # This suite isolates rb-execution/v1 phase mechanics. The package-level Ralph
 # suite covers the default runtime-only RBF operational acceptance separately.
 export RB_RALPH_FINAL_AUDIT=0
+export RB_RALPH_EXECUTION_UNIT=phase
+export RB_RALPH_MANAGER_AUDIT_MODE=legacy
 
 PASS=0
 
@@ -218,6 +220,110 @@ awk -F '\t' '$1 == "F-P02-A001" && $6 != "" && $7 == "2" && $8 != "" { found=1 }
 ok "finding resolution is bound to opening and closing evidence fingerprints"
 assert_contains "$MOCK_STATE/agent-P02-2.txt" "F-P02-A001 (attempt 1): focused validation failed" \
   "fresh executor receives the cumulative finding ledger"
+
+# Sequential pending tasks are separate fresh provider invocations by default,
+# even when bounded parallelism is not enabled.
+cat > "$TEMP_ROOT/fresh-task-agent" <<'FRESH_TASK_AGENT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > "$MOCK_STATE/fresh-task-${RB_RALPH_TASK_ID:?}.prompt"
+printf '%s\n' "$RB_RALPH_TASK_ID" >> "$MOCK_STATE/fresh-task-calls"
+mkdir -p src
+printf 'implemented\n' > "src/${RB_RALPH_TASK_ID}.txt"
+FRESH_TASK_AGENT
+cat > "$TEMP_ROOT/fresh-task-manager" <<'FRESH_TASK_MANAGER'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > /dev/null
+printf '%s\n' 'RB_RALPH_DECISION: COMPLETE' 'RB_RALPH_REASON: integrated task evidence accepted'
+FRESH_TASK_MANAGER
+chmod +x "$TEMP_ROOT/fresh-task-agent" "$TEMP_ROOT/fresh-task-manager"
+FRESH_TASK_PROJECT="$(new_project fresh-task-boundary)"
+RB_RALPH_EXECUTION_UNIT=task "$RALPH" --project "$FRESH_TASK_PROJECT" --validation-mode manager \
+  --agent-cmd "$TEMP_ROOT/fresh-task-agent" --manager-cmd "$TEMP_ROOT/fresh-task-manager" \
+  > "$TEMP_ROOT/fresh-task.out"
+assert_eq "2" "$(wc -l < "$MOCK_STATE/fresh-task-calls" | tr -d ' ')" \
+  "two sequential tasks receive two fresh executor calls"
+assert_contains "$MOCK_STATE/fresh-task-calls" 'T002' "first sequential task has its own provider identity"
+assert_contains "$MOCK_STATE/fresh-task-calls" 'T003' "second sequential task has its own provider identity"
+assert_contains "$MOCK_STATE/fresh-task-T002.prompt" 'Implement only the task below in this fresh execution context' \
+  "fresh task prompt uses the bounded task extract as authority"
+
+# An incomplete manager matrix consumes only a manager-completion retry. The
+# valid retry returns every observable finding as one batch to the next agent.
+cat > "$TEMP_ROOT/exhaustive-agent" <<'EXHAUSTIVE_AGENT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > "$MOCK_STATE/exhaustive-agent-${RB_RALPH_ATTEMPT:?}.prompt"
+count=0
+[ ! -f "$MOCK_STATE/exhaustive-agent.count" ] || count="$(cat "$MOCK_STATE/exhaustive-agent.count")"
+count=$((count + 1))
+printf '%s\n' "$count" > "$MOCK_STATE/exhaustive-agent.count"
+mkdir -p src
+printf 'attempt=%s\n' "$RB_RALPH_ATTEMPT" > src/exhaustive.txt
+EXHAUSTIVE_AGENT
+cat > "$TEMP_ROOT/exhaustive-manager" <<'EXHAUSTIVE_MANAGER'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > /dev/null
+count=0
+[ ! -f "$MOCK_STATE/exhaustive-manager.count" ] || count="$(cat "$MOCK_STATE/exhaustive-manager.count")"
+count=$((count + 1))
+printf '%s\n' "$count" > "$MOCK_STATE/exhaustive-manager.count"
+if [ "$count" -eq 1 ]; then
+  printf '%s\n' \
+    'RB_RALPH_AUDIT_STATUS: COMPLETE' \
+    'RB_RALPH_CRITERION: T001 | FAIL | source boundary lacks the required behavior' \
+    'RB_RALPH_FINDING: T001 | src/exhaustive.txt | task behavior complete | first independent defect | src/exhaustive.txt' \
+    'RB_RALPH_DECISION: RETRY' \
+    'RB_RALPH_REASON: incomplete first audit response'
+elif [ "$count" -eq 2 ]; then
+  printf '%s\n' \
+    'RB_RALPH_AUDIT_STATUS: COMPLETE' \
+    'RB_RALPH_CRITERION: T001 | FAIL | source boundary lacks the required behavior' \
+    'RB_RALPH_CRITERION: AC-T001-01 | FAIL | version behavior is not proven' \
+    'RB_RALPH_FINDING: T001 | src/exhaustive.txt | task behavior complete | first independent defect | src/exhaustive.txt' \
+    'RB_RALPH_FINDING: AC-T001-01 | consumer version boundary | exit zero and version 0.1.0 | second independent defect | canonical consumer probe' \
+    'RB_RALPH_DECISION: RETRY' \
+    'RB_RALPH_REASON: complete two-finding batch'
+else
+  printf '%s\n' \
+    'RB_RALPH_AUDIT_STATUS: COMPLETE' \
+    'RB_RALPH_CRITERION: T001 | PASS | current source and changed-path evidence' \
+    'RB_RALPH_CRITERION: AC-T001-01 | PASS | canonical consumer probe passes' \
+    'RB_RALPH_DECISION: COMPLETE' \
+    'RB_RALPH_REASON: complete matrix accepted'
+fi
+EXHAUSTIVE_MANAGER
+chmod +x "$TEMP_ROOT/exhaustive-agent" "$TEMP_ROOT/exhaustive-manager"
+EXHAUSTIVE_PROJECT="$TEMP_ROOT/exhaustive-project"
+mkdir -p "$EXHAUSTIVE_PROJECT/.rb/features/example"
+node "$CLI" project init "$EXHAUSTIVE_PROJECT" --name exhaustive --id exhaustive >/dev/null
+cp "$MINIMAL_FIXTURE" "$EXHAUSTIVE_PROJECT/.rb/features/example/PHASES.md"
+node "$CLI" manifest sync "$EXHAUSTIVE_PROJECT" >/dev/null
+RB_RALPH_EXECUTION_UNIT=task RB_RALPH_MANAGER_AUDIT_MODE=exhaustive \
+  "$RALPH" --project "$EXHAUSTIVE_PROJECT" --validation-mode manager \
+  --manager-retries 2 --manager-retry-wait 0 \
+  --agent-cmd "$TEMP_ROOT/exhaustive-agent" --manager-cmd "$TEMP_ROOT/exhaustive-manager" \
+  > "$TEMP_ROOT/exhaustive.out"
+assert_eq "2" "$(cat "$MOCK_STATE/exhaustive-agent.count")" \
+  "incomplete audit matrix does not consume an executor repair attempt"
+assert_eq "3" "$(cat "$MOCK_STATE/exhaustive-manager.count")" \
+  "manager completes the missing matrix over the same evidence before repair"
+assert_contains "$MOCK_STATE/exhaustive-agent-2.prompt" 'first independent defect' \
+  "next executor receives the first finding in the exhaustive batch"
+assert_contains "$MOCK_STATE/exhaustive-agent-2.prompt" 'second independent defect' \
+  "next executor receives the second finding in the exhaustive batch"
+EXHAUSTIVE_RUN="$(basename "$(find "$EXHAUSTIVE_PROJECT/.rb/runs" -mindepth 1 -maxdepth 1 -type d -print -quit)")"
+RB_RALPH_WATCH_COLS=118 RB_RALPH_WATCH_LINES=45 \
+  "$ROOT/bin/rb-ralph-watch" --project "$EXHAUSTIVE_PROJECT" --run "$EXHAUSTIVE_RUN" \
+  --once --no-color > "$TEMP_ROOT/exhaustive-dashboard.out"
+assert_contains "$TEMP_ROOT/exhaustive-dashboard.out" 'total=2 open=0 resolved=2' \
+  "dashboard exposes cumulative open and resolved finding counts"
+if [ "$(find "$EXHAUSTIVE_PROJECT/.rb/runs/$EXHAUSTIVE_RUN/logs" -name '*manager*-audit.json' -type f | wc -l | tr -d ' ')" -lt 3 ]; then
+  fail "manager audit completion reports were not preserved for every review call"
+fi
+ok "manager audit completion reports remain canonical evidence"
 
 printf '0\n' > "$MOCK_STATE/agent-count"
 ECHOED_PROTOCOL_PROJECT="$(new_project echoed-protocol-project)"

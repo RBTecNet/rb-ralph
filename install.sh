@@ -126,6 +126,8 @@ install -m 0755 "$SOURCE_ROOT/lib/usage-summary.cjs" "$INSTALL_HOME/lib/usage-su
 install -m 0755 "$SOURCE_ROOT/lib/dashboard.cjs" "$INSTALL_HOME/lib/dashboard.cjs"
 install -m 0755 "$SOURCE_ROOT/lib/splash.cjs" "$INSTALL_HOME/lib/splash.cjs"
 install -m 0755 "$SOURCE_ROOT/lib/process-supervisor.cjs" "$INSTALL_HOME/lib/process-supervisor.cjs"
+install -m 0755 "$SOURCE_ROOT/lib/evidence-index.cjs" "$INSTALL_HOME/lib/evidence-index.cjs"
+install -m 0755 "$SOURCE_ROOT/lib/manager-audit.cjs" "$INSTALL_HOME/lib/manager-audit.cjs"
 install -m 0755 "$SOURCE_ROOT/lib/operational-verifier.cjs" "$INSTALL_HOME/lib/operational-verifier.cjs"
 install -m 0644 "$SOURCE_ROOT/pricing.example.json" "$INSTALL_HOME/pricing.example.json"
 install -m 0644 "$SOURCE_ROOT/README.md" "$INSTALL_HOME/README.md"

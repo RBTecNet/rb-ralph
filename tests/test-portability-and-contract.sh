@@ -75,6 +75,11 @@ export MOCK_STATE
 # Existing contract tests exercise P01 semantics in isolation. Dedicated tests
 # below opt into the new default final audit explicitly.
 export RB_RALPH_FINAL_AUDIT=0
+# Legacy fixtures below focus on their named control-plane behavior. Dedicated
+# regressions exercise the new default task boundary and exhaustive manager
+# matrix without requiring every historical mock to reproduce that protocol.
+export RB_RALPH_EXECUTION_UNIT=phase
+export RB_RALPH_MANAGER_AUDIT_MODE=legacy
 
 MOCK_DRIVER="$TEMP_ROOT/mock-driver"
 export MOCK_DRIVER
@@ -185,6 +190,8 @@ INSTALL_PREFIX="$TEMP_ROOT/installed prefix"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/control-plane.cjs" ] || fail "installed control-plane helper is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/splash.cjs" ] || fail "installed splash helper is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/process-supervisor.cjs" ] || fail "installed process supervisor is missing"
+[ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/evidence-index.cjs" ] || fail "installed evidence index is missing"
+[ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/manager-audit.cjs" ] || fail "installed manager audit validator is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/operational-verifier.cjs" ] || fail "installed operational verifier is missing"
 [ -f "$INSTALL_PREFIX/libexec/rb-ralph/VERSION" ] || fail "installed version marker is missing"
 [ -x "$INSTALL_PREFIX/bin/rb-ralph-watch" ] || fail "installed dashboard launcher is missing"
@@ -192,9 +199,9 @@ ok "temporary-prefix installation keeps launcher and auxiliary resources togethe
 "$RALPH" --ver > "$TEMP_ROOT/source-version.out"
 "$INSTALL_PREFIX/bin/rb-ralph" --version > "$TEMP_ROOT/installed-version.out"
 "$INSTALL_PREFIX/bin/rb-ralph" --help > "$TEMP_ROOT/installed-help.out"
-assert_contains "$TEMP_ROOT/source-version.out" "RB Ralph 0.5.2" "source runner reports its package version"
-assert_contains "$TEMP_ROOT/installed-version.out" "RB Ralph 0.5.2" "installed runner reports the same package version"
-assert_contains "$TEMP_ROOT/install.out" "RB Ralph 0.5.2 installed" "installer reports the installed version"
+assert_contains "$TEMP_ROOT/source-version.out" "RB Ralph 0.5.3" "source runner reports its package version"
+assert_contains "$TEMP_ROOT/installed-version.out" "RB Ralph 0.5.3" "installed runner reports the same package version"
+assert_contains "$TEMP_ROOT/install.out" "RB Ralph 0.5.3 installed" "installer reports the installed version"
 assert_contains "$TEMP_ROOT/installed-help.out" "--splash" "installed runner exposes the animated splash flag"
 assert_contains "$PACKAGE_ROOT/bin/rb-ralph" '╰──◡◡──╯          RALPH · capivara de plantão' \
   "static brand preserves Ralph the capybara"
@@ -202,9 +209,9 @@ assert_contains "$PACKAGE_ROOT/lib/dashboard.cjs" '╰──◡◡──╯${" "
   "wide dashboard preserves Ralph the capybara"
 node -e '
   const { compose } = require(process.argv[1]);
-  const frame = compose("0.5.2", 100).join("\n");
+  const frame = compose("0.5.3", 100).join("\n");
   const capybara = ["◕                    ◕", "▪      ▪", "◡◡"];
-  if (!frame.includes("v0.5.2") || !frame.includes("RALPH · capivara de plantão") ||
+  if (!frame.includes("v0.5.3") || !frame.includes("RALPH · capivara de plantão") ||
       !capybara.every((feature) => frame.includes(feature))) process.exit(1);
 ' "$INSTALL_PREFIX/libexec/rb-ralph/lib/splash.cjs"
 ok "installed splash preserves the versioned Ralph capybara"
@@ -721,6 +728,28 @@ BUSY_SILENT_PROVIDER
   assert_not_contains "$TEMP_ROOT/busy-silent.log" 'RB_RALPH_PROCESS_STATUS: TIMEOUT' \
     "busy provider remains bounded by activity rather than output alone"
 
+  cat > "$TEMP_ROOT/active-no-output-provider" <<'ACTIVE_NO_OUTPUT_PROVIDER'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > /dev/null
+started="$SECONDS"
+while [ "$((SECONDS - started))" -lt 30 ]; do :; done
+ACTIVE_NO_OUTPUT_PROVIDER
+  chmod +x "$TEMP_ROOT/active-no-output-provider"
+  if node "$PACKAGE_ROOT/lib/process-supervisor.cjs" \
+    --input "$TEMP_ROOT/supervisor-input" --output "$TEMP_ROOT/first-output-timeout.log" \
+    --status "$TEMP_ROOT/first-output-status.json" \
+    --idle-timeout 0 --first-output-timeout 1 --timeout 10 --grace 1 --label executor \
+    -- "$TEMP_ROOT/active-no-output-provider"; then
+    fail "active provider without output escaped the first-output bound"
+  fi
+  assert_contains "$TEMP_ROOT/first-output-timeout.log" 'RB_RALPH_TIMEOUT_KIND: first-output' \
+    "active-but-silent provider has a distinct first-output timeout"
+  assert_contains "$TEMP_ROOT/first-output-status.json" '"state":"timeout"' \
+    "supervisor publishes an atomic final live-status record"
+  assert_contains "$TEMP_ROOT/first-output-status.json" '"outputBytes":0' \
+    "live status exposes bounded metadata without provider transcript text"
+
   cat > "$TEMP_ROOT/orphaning-provider" <<'ORPHANING_PROVIDER'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -958,7 +987,7 @@ assert_contains "$TEMP_ROOT/dashboard.out" "codex[priced-model] executor / codex
   "dashboard identifies the effective model for each role"
 assert_contains "$TEMP_ROOT/dashboard.out" "RALPH · capivara de plantão" \
   "wide dashboard renders the RB Ralph mascot"
-assert_contains "$TEMP_ROOT/dashboard.out" "v0.5.2" \
+assert_contains "$TEMP_ROOT/dashboard.out" "v0.5.3" \
   "dashboard identifies the running RB Ralph version"
 assert_contains "$TEMP_ROOT/dashboard.out" "LOG RECENTE · GERENTE" \
   "dashboard shows the current role in a compact recent-log panel"
@@ -1290,7 +1319,11 @@ assert_contains "$TEMP_ROOT/help.out" '--max-total-attempts N' "--help exposes t
 assert_contains "$TEMP_ROOT/help.out" '--max-strategy-resets N' "--help exposes bounded strategy recovery"
 assert_contains "$TEMP_ROOT/help.out" '--manager-retries <n>' "--help exposes same-evidence manager recovery"
 assert_contains "$TEMP_ROOT/help.out" '--agent-idle-timeout N' "--help exposes executor inactivity recovery"
+assert_contains "$TEMP_ROOT/help.out" '--agent-first-output-timeout N' "--help exposes executor first-output bound"
 assert_contains "$TEMP_ROOT/help.out" '--manager-idle-timeout N' "--help exposes manager inactivity recovery"
+assert_contains "$TEMP_ROOT/help.out" '--manager-first-output-timeout N' "--help exposes manager first-output bound"
+assert_contains "$TEMP_ROOT/help.out" '--manager-audit <mode>' "--help exposes exhaustive manager audit mode"
+assert_contains "$TEMP_ROOT/help.out" '--execution-unit <m>' "--help exposes fresh execution-unit boundary"
 assert_contains "$TEMP_ROOT/help.out" '--operations <path>' "--help exposes the operational contract override"
 assert_contains "$TEMP_ROOT/help.out" '--no-final-audit' "--help documents the explicit final-audit opt-out"
 assert_contains "$TEMP_ROOT/help.out" '--ver, --version' "--help exposes version inspection"

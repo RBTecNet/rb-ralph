@@ -68,7 +68,7 @@ No auxiliary resource is written directly to `/bin`. The layout is:
     ├── bin/{rb-ralph,rb-ralph-watch}
     ├── adapters/{adapter-utils,codex,claude,opencode}.sh
     ├── core/rb-harness.cjs
-    ├── lib/{evidence,control-plane,process-supervisor,operational-verifier,provider-telemetry,usage-summary,dashboard}.cjs
+    ├── lib/{evidence,evidence-index,manager-audit,control-plane,process-supervisor,operational-verifier,provider-telemetry,usage-summary,dashboard}.cjs
     ├── VERSION
     ├── pricing.example.json
     └── README.md
@@ -124,7 +124,7 @@ Confirm the exact source or installed build at any time with:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.5.2
+# RB Ralph 0.5.3
 ```
 
 The installer prints and copies the same `VERSION` marker, so a source upgrade
@@ -182,6 +182,14 @@ close it. `Ctrl-C` still interrupts an active runner and restores the terminal.
 Observable state is written atomically for every execution, even without
 `--dashboard`. A second terminal can therefore attach before, during, or after
 a run:
+
+While a provider call is active, an orchestrator-owned metadata side channel
+reports process state, elapsed time, first-byte latency, observed byte count,
+CPU/I/O activity age, and timeout countdowns. It never contains provider text.
+The dashboard therefore distinguishes a started process, active-but-silent
+inference, idle silence, first output, and timeout instead of claiming only
+that it is waiting for an unknown provider event. Canonical raw role logs are
+still published atomically when the call ends.
 
 ```bash
 rb-ralph-watch --project /path/to/project
@@ -473,6 +481,9 @@ following environment is available:
 - `RB_RALPH_AGENT_LOG` for the manager role; this is the canonical executor
   output published after the executor process exits.
 - `RB_RALPH_VALIDATION_LOG` for the manager role.
+- `RB_RALPH_EVIDENCE_INDEX` for the manager role: bounded hashes, changed
+  paths, status markers, and validation command/exit/duration rows. Full raw
+  logs remain available by canonical path for targeted inspection.
 - `RB_RALPH_CHANGED_PATHS_FILE` for the manager role.
 - `RB_RALPH_AGENT_EXIT_CODE` for the manager role.
 - `RB_RALPH_TELEMETRY_FILE`: per-call usage record the adapter may populate.
@@ -480,8 +491,8 @@ following environment is available:
   operational contract was selected, otherwise empty.
 
 `RB_RALPH_PROJECT_ROOT` is the primary project root in shared mode and the
-agent's detached task worktree in isolated mode. `RB_RALPH_TASK_ID` is set only
-for a task-scoped parallel agent.
+agent's detached task worktree in isolated mode. `RB_RALPH_TASK_ID` is set for
+every task-scoped agent, whether sequential or parallel.
 
 A custom manager adapter must provide its model with read access to
 `RB_RALPH_PROJECT_ROOT` and the evidence paths above. The manager prompt
@@ -491,13 +502,25 @@ filesystem access must therefore implement its own bounded and redacted
 evidence transport before it can satisfy this contract; otherwise it must
 reject manager use clearly.
 
-The agent may implement the phase. The manager must inspect without repairing
-and return:
+The agent may implement its task. By default (`--manager-audit exhaustive`),
+the manager must inspect without repairing, finish the entire required matrix,
+return all currently observable findings as one batch, and only then decide:
 
 ```text
-RB_RALPH_DECISION: COMPLETE
-RB_RALPH_REASON: Every criterion is covered and focused validations pass.
+RB_RALPH_AUDIT_STATUS: COMPLETE
+RB_RALPH_CRITERION: T001 | PASS | current source and canonical validation evidence
+RB_RALPH_CRITERION: AC-T001-01 | FAIL | consumer probe contradicts the criterion
+RB_RALPH_FINDING: AC-T001-01 | public consumer boundary | expected value | observed value | command/log provenance
+RB_RALPH_DECISION: RETRY
+RB_RALPH_REASON: Complete finding batch requires one repair cycle.
 ```
+
+Every task and acceptance-criterion ID must appear exactly once with `PASS`,
+`FAIL`, `UNPROVEN`, `HUMAN_PENDING`, or `NOT_APPLICABLE`. Missing rows trigger a
+manager-only completion retry over the same executor evidence. `RETRY` requires
+a structured finding for every failed or unproven row. `COMPLETE` is accepted
+only when every row passes or is demonstrably not applicable. The explicit
+compatibility mode `--manager-audit legacy` accepts the older two-line response.
 
 `RETRY` and `BLOCKED` are the other valid decisions. Adapters own CLI-specific
 arguments, models, permissions, authentication, and output normalization, so
@@ -701,16 +724,19 @@ always identifies new runs as `ACESSO YOLO` or `ACESSO PROTEGIDO`.
 
 ## Context and continuity bounds
 
-Every provider invocation is a fresh, non-persistent call. Continuity comes
-from versioned artifacts and run evidence, not a provider chat session:
+Every provider invocation is a fresh, non-persistent call. The default
+`--execution-unit task` also gives each pending sequential task its own provider
+call in dependency order; `--execution-unit phase` is an explicit compatibility
+mode. Continuity comes from versioned artifacts and run evidence, not a provider
+chat session:
 
-- sequential agents receive only the validated current phase;
+- sequential agents receive only their validated task extract;
 - parallel agents receive only their task plus phase metadata;
-- retries receive the previous manager reason and paths to prior executor,
-  validation, and changed-path evidence;
-- managers receive the validated phase, executor exit status, changed source
-  paths, executor output, validation commands, each validation's output and
-  exit status, and pending manual validations;
+- retries receive normalized open findings, the previous failure, and paths to
+  prior executor, validation, and changed-path evidence;
+- managers receive the validated phase plus a bounded canonical evidence index;
+  raw executor and validation logs are opened only for a concrete unresolved
+  matrix row;
 - completed phases resume only when the selected plan SHA-256 is unchanged.
 
 Changed files are summarized by path and inspected by the manager in the
@@ -743,9 +769,14 @@ The default recovery budget is deliberately finite:
   stdout/stderr plus descendant CPU and I/O progress, while other platforms use
   provider output. `--agent-timeout 3600` remains the one-hour wall-clock
   ceiling even when a process stays busy.
+- `--agent-first-output-timeout 300` bounds a process that remains CPU/I/O-active
+  without ever producing provider output. Such startup/inference failures retry
+  without spending a manager review or logical implementation attempt.
 - `--manager-idle-timeout 180` and `--manager-timeout 900` independently bound
   each technical-manager call. A manager timeout consumes only the manager
   retry budget and never repeats the executor.
+- `--manager-first-output-timeout 180` independently bounds the manager's first
+  byte while preserving executor evidence for a manager-only retry.
 
 Ralph treats a changed repository path plus a non-repeated manager reason as a
 progress signal. No changed path, or repeated feedback despite changes,
@@ -801,7 +832,8 @@ hard cap is the final defense against superficial code churn.
 Each role timeout accepts `0` to disable that individual guard, although doing
 so is discouraged for unattended runs. Environment equivalents are
 `RB_RALPH_AGENT_TIMEOUT`, `RB_RALPH_AGENT_IDLE_TIMEOUT`,
-`RB_RALPH_MANAGER_TIMEOUT`, and `RB_RALPH_MANAGER_IDLE_TIMEOUT`.
+`RB_RALPH_AGENT_FIRST_OUTPUT_TIMEOUT`, `RB_RALPH_MANAGER_TIMEOUT`,
+`RB_RALPH_MANAGER_IDLE_TIMEOUT`, and `RB_RALPH_MANAGER_FIRST_OUTPUT_TIMEOUT`.
 
 The default maximum generated prompt size is 262144 bytes. Override it with
 `--max-prompt-bytes N`; `0` disables this guard. This is a deterministic input
