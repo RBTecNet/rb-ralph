@@ -159,6 +159,7 @@ RUNTIME_SHELL_FILES=(
   "$PACKAGE_ROOT/adapters/adapter-utils.sh"
   "$PACKAGE_ROOT/adapters/claude.sh"
   "$PACKAGE_ROOT/adapters/codex.sh"
+  "$PACKAGE_ROOT/adapters/api.sh"
   "$PACKAGE_ROOT/adapters/opencode.sh"
   "$PACKAGE_ROOT/install.sh"
   "$PACKAGE_ROOT/rb-ralph.sh"
@@ -194,6 +195,7 @@ INSTALL_PREFIX="$TEMP_ROOT/installed prefix"
 "$INSTALL_ENTRY" --install --prefix "$INSTALL_PREFIX" > "$TEMP_ROOT/install.out"
 [ -L "$INSTALL_PREFIX/bin/rb-ralph" ] || fail "installed launcher is not a symlink"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/adapters/codex.sh" ] || fail "installed adapters are missing"
+[ -x "$INSTALL_PREFIX/libexec/rb-ralph/adapters/api.sh" ] || fail "installed direct API adapter is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/adapters/opencode.sh" ] || fail "installed OpenCode adapter is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/evidence.cjs" ] || fail "installed evidence helper is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/control-plane.cjs" ] || fail "installed control-plane helper is missing"
@@ -214,6 +216,9 @@ assert_contains "$TEMP_ROOT/source-version.out" "RB Ralph $PACKAGE_VERSION" "sou
 assert_contains "$TEMP_ROOT/installed-version.out" "RB Ralph $PACKAGE_VERSION" "installed runner reports the same package version"
 assert_contains "$TEMP_ROOT/install.out" "RB Ralph $PACKAGE_VERSION installed" "installer reports the installed version"
 assert_contains "$TEMP_ROOT/installed-help.out" "--splash" "installed runner exposes the animated splash flag"
+RB_RALPH_CORE_CLI=/bin/echo "$RALPH" --login > "$TEMP_ROOT/login-delegation.out"
+assert_contains "$TEMP_ROOT/login-delegation.out" "auth login" \
+  "Ralph login delegates to the shared RB Harness credential service"
 assert_contains "$PACKAGE_ROOT/bin/rb-ralph" '╰──◡◡──╯          RALPH · capivara de plantão' \
   "static brand preserves Ralph the capybara"
 assert_contains "$PACKAGE_ROOT/lib/dashboard.cjs" '╰──◡◡──╯${" ".repeat(10)}RALPH · capivara de plantão' \
@@ -317,6 +322,55 @@ printf '%s\n' '{"credential":"must-be-rejected","agent":{"provider":"codex"}}' |
     node "$PACKAGE_ROOT/lib/profiles.cjs" save unsafe
 assert_contains "$TEMP_ROOT/profile-secret-field.out" "profile.credential is not supported" \
   "profiles reject credential-like and all other unknown fields"
+
+printf '%s\n' '{
+  "description": "Direct API credential references.",
+  "agent": {"provider": "deepseek", "model": "deepseek-v4-pro", "credential": "pessoal"},
+  "manager": {"provider": "openrouter", "model": "vendor/auditor", "credential": "auditor"}
+}' | RB_RALPH_PROFILES_FILE="$PROFILE_FILE" node "$PACKAGE_ROOT/lib/profiles.cjs" save api-direct >/dev/null
+RB_RALPH_PROFILES_FILE="$PROFILE_FILE" node "$PACKAGE_ROOT/lib/profiles.cjs" args api-direct > "$TEMP_ROOT/profile-direct-args.out"
+assert_contains "$TEMP_ROOT/profile-direct-args.out" "--agent-credential" \
+  "profiles retain direct API credential references"
+assert_contains "$TEMP_ROOT/profile-direct-args.out" "pessoal" \
+  "profiles serialize the executor credential label without secret material"
+assert_contains "$TEMP_ROOT/profile-direct-args.out" "--manager-credential" \
+  "profiles retain an independent manager credential reference"
+
+printf '%s\n' '{"agent":{"provider":"codex","credential":"invalid"}}' | \
+  expect_failure "$TEMP_ROOT/profile-cli-credential.out" env RB_RALPH_PROFILES_FILE="$PROFILE_FILE" \
+    node "$PACKAGE_ROOT/lib/profiles.cjs" save cli-secret
+assert_contains "$TEMP_ROOT/profile-cli-credential.out" "valid only with a direct API provider" \
+  "profiles reject credential references for CLI providers"
+
+DIRECT_VALIDATION_PROJECT="$(new_project direct-api-validation)"
+expect_failure "$TEMP_ROOT/direct-missing-model.out" \
+  "$RALPH" --project "$DIRECT_VALIDATION_PROJECT" --provider deepseek --yolo
+assert_contains "$TEMP_ROOT/direct-missing-model.out" "requires --agent-model or --model" \
+  "direct API execution requires an explicit provider model ID"
+expect_failure "$TEMP_ROOT/direct-protected.out" \
+  "$RALPH" --project "$DIRECT_VALIDATION_PROJECT" --provider deepseek \
+    --model deepseek-v4-pro --protected
+assert_contains "$TEMP_ROOT/direct-protected.out" "cannot provide an OS sandbox" \
+  "direct API executors reject a misleading protected mode"
+
+expect_failure "$TEMP_ROOT/direct-adapter-invalid-provider.out" env \
+  RB_RALPH_PROVIDER=invalid RB_RALPH_ROLE=agent \
+  RB_RALPH_PROJECT_ROOT="$DIRECT_VALIDATION_PROJECT" RB_RALPH_MODEL=model \
+  "$PACKAGE_ROOT/adapters/api.sh"
+assert_contains "$TEMP_ROOT/direct-adapter-invalid-provider.out" "must select a direct API provider" \
+  "direct API adapter rejects unknown providers before any network call"
+
+printf 'executor prompt\n' | env \
+  RB_RALPH_PROVIDER=deepseek RB_RALPH_ROLE=agent \
+  RB_RALPH_PROJECT_ROOT="$DIRECT_VALIDATION_PROJECT" RB_RALPH_MODEL=deepseek-v4-pro \
+  RB_RALPH_CREDENTIAL=pessoal RB_RALPH_DIRECT_API_CORE=/bin/echo \
+  "$PACKAGE_ROOT/adapters/api.sh" > "$TEMP_ROOT/direct-adapter-contract.out"
+assert_contains "$TEMP_ROOT/direct-adapter-contract.out" "_provider-run" \
+  "direct API adapter delegates through the selected shared Harness core"
+assert_contains "$TEMP_ROOT/direct-adapter-contract.out" "deepseek-v4-pro" \
+  "direct API adapter forwards the explicit provider model"
+assert_contains "$TEMP_ROOT/direct-adapter-contract.out" "pessoal" \
+  "direct API adapter forwards only the saved credential reference"
 expect_failure "$TEMP_ROOT/profile-built-in-delete.out" env RB_RALPH_PROFILES_FILE="$PROFILE_FILE" \
   "$RALPH" profile delete balanced
 assert_contains "$TEMP_ROOT/profile-built-in-delete.out" "immutable" \

@@ -66,7 +66,7 @@ No auxiliary resource is written directly to `/bin`. The layout is:
 │   └── rb-ralph-watch -> ../libexec/rb-ralph/bin/rb-ralph-watch
 └── libexec/rb-ralph/
     ├── bin/{rb-ralph,rb-ralph-watch}
-    ├── adapters/{adapter-utils,codex,claude,opencode}.sh
+    ├── adapters/{adapter-utils,api,codex,claude,opencode}.sh
     ├── core/rb-harness.cjs
     ├── lib/{evidence,evidence-index,manager-audit,control-plane,process-supervisor,operational-verifier,fragment-discovery,profiles,provider-telemetry,usage-summary,dashboard}.cjs
     ├── VERSION
@@ -124,7 +124,7 @@ Confirm the exact source or installed build at any time with:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.7.0
+# RB Ralph 0.8.0
 ```
 
 The installer prints and copies the same `VERSION` marker, so a source upgrade
@@ -158,9 +158,10 @@ The immutable built-in profiles are:
 | `strict` | fresh call per task, exhaustive manager, final audit, dashboard, protected |
 
 Built-ins deliberately omit provider and model choices. The wizard asks for
-them; a custom profile can retain them. Profiles never retain project paths,
-plan IDs, Memory URLs or token variable values, operational-contract paths,
-pricing files, credentials, or secrets.
+them; a custom profile can retain providers, models, efforts, and saved
+credential references. Profiles never retain project paths, plan IDs, Memory
+URLs or token variable values, operational-contract paths, pricing files,
+API keys, OAuth tokens, or other secret material.
 
 Saved profiles use the versioned `rb-ralph-profiles/v1` JSON contract at
 `${XDG_CONFIG_HOME:-$HOME/.config}/rb-ralph/profiles.json`. Ralph creates the
@@ -686,6 +687,7 @@ manager option is given explicitly:
 | `--agent-provider codex` | Codex | Codex, inherited |
 | `--agent-provider claude --manager-provider codex` | Claude | Codex, explicit |
 | `--agent-provider opencode --manager-provider claude` | OpenCode | Claude, explicit |
+| `--agent-provider deepseek --manager-provider openai` | DeepSeek API | OpenAI API, explicit |
 | `--agent-cmd /path/agent` | `/path/agent` | `/path/agent`, inherited |
 | `--agent-cmd /path/agent --manager-cmd /path/manager` | `/path/agent` | `/path/manager`, explicit |
 
@@ -698,6 +700,53 @@ primary role.
 It does not mean the same conversation: executor and manager are separate,
 ephemeral invocations with no shared session. An explicit manager model still
 takes precedence over inherited model configuration.
+
+### Direct API providers and shared login
+
+Ralph can call these providers without routing them through OpenCode or another
+model CLI:
+
+| Provider | Authentication available through `rb-ralph --login` |
+| --- | --- |
+| `openai` | API key |
+| `anthropic` | API key |
+| `gemini` | API key or Google Application Default Credentials |
+| `deepseek` | API key |
+| `minimax` | API key |
+| `openrouter` | API key or browser OAuth with PKCE |
+
+Run the guided login once, then reference the saved credential by its label or
+ID. The same encrypted per-user vault is shared with RB Harness:
+
+```bash
+rb-ralph --login
+rb-harness auth list
+
+rb-ralph --project . --plan <artifact-id> \
+  --agent-provider deepseek --agent-model deepseek-v4-pro \
+  --agent-credential pessoal \
+  --manager-provider openai --manager-model <api-model-id> \
+  --manager-credential auditor \
+  --agent-effort high --manager-effort high \
+  --yolo --dashboard
+```
+
+Direct providers require an explicit provider model ID. Credential references
+may be saved in profiles, but secret values never may. Executor and manager
+remain fresh, independent calls; the manager is always limited to read tools,
+while the executor can edit the workspace and run bounded commands.
+
+The direct API executor currently requires `--yolo`: Ralph cannot truthfully
+provide an operating-system sandbox around its native local tools. Use the
+existing `codex`, `claude`, or another sandbox-capable CLI adapter when
+`--protected` execution is required. This restriction does not weaken the
+manager, whose direct API tools remain read-only in both modes.
+
+OpenAI and Anthropic do not expose their consumer CLI/browser sessions as a
+generic third-party OAuth login, so their direct API modes use API keys. The
+existing `codex` and `claude` CLI providers continue managing their own login
+sessions. Gemini OAuth uses the installed `gcloud` Application Default
+Credentials flow; OpenRouter implements its documented localhost PKCE flow.
 
 ### Model selection by role
 
@@ -915,8 +964,14 @@ OpenCode, MiniMax, DeepSeek, and other CLIs connected through `--agent-cmd` or
 native CLI flags. A custom adapter that cannot enforce `protected` must exit
 with a clear error instead of silently running unrestricted.
 
-Authentication remains the responsibility of each installed CLI. The TUI
-always identifies new runs as `ACESSO YOLO` or `ACESSO PROTEGIDO`.
+Authentication for `codex`, `claude`, and `opencode` remains the responsibility
+of each installed CLI. Native API providers use the shared encrypted credential
+vault configured by `rb-ralph --login`; neither secrets nor tokens are passed
+in process arguments, profiles, run evidence, or dashboard state. The vault key
+is stored separately but under the same operating-system account, so this
+protects against accidental plaintext disclosure—not compromise of that user
+account. The TUI always identifies new runs as `ACESSO YOLO` or
+`ACESSO PROTEGIDO`.
 
 ## Context and continuity bounds
 

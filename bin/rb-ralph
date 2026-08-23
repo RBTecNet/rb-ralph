@@ -54,6 +54,9 @@ ENV_MANAGER_MODEL="${RB_RALPH_MANAGER_MODEL:-}"
 ENV_SHARED_EFFORT="${RB_RALPH_EFFORT:-}"
 ENV_AGENT_EFFORT="${RB_RALPH_AGENT_EFFORT:-}"
 ENV_MANAGER_EFFORT="${RB_RALPH_MANAGER_EFFORT:-}"
+ENV_SHARED_CREDENTIAL="${RB_RALPH_CREDENTIAL:-}"
+ENV_AGENT_CREDENTIAL="${RB_RALPH_AGENT_CREDENTIAL:-}"
+ENV_MANAGER_CREDENTIAL="${RB_RALPH_MANAGER_CREDENTIAL:-}"
 SHARED_PROVIDER=""
 CLI_AGENT_CMD=""
 CLI_MANAGER_CMD=""
@@ -76,6 +79,12 @@ CLI_MANAGER_EFFORT=""
 CLI_SHARED_EFFORT_SET=0
 CLI_AGENT_EFFORT_SET=0
 CLI_MANAGER_EFFORT_SET=0
+CLI_SHARED_CREDENTIAL=""
+CLI_AGENT_CREDENTIAL=""
+CLI_MANAGER_CREDENTIAL=""
+CLI_SHARED_CREDENTIAL_SET=0
+CLI_AGENT_CREDENTIAL_SET=0
+CLI_MANAGER_CREDENTIAL_SET=0
 AGENT_CMD=""
 MANAGER_CMD=""
 AGENT_PROVIDER=""
@@ -84,6 +93,8 @@ AGENT_MODEL=""
 MANAGER_MODEL=""
 AGENT_EFFORT=""
 MANAGER_EFFORT=""
+AGENT_CREDENTIAL=""
+MANAGER_CREDENTIAL=""
 MANAGER_INHERITS_AGENT=0
 MAX_ATTEMPTS="${RB_RALPH_MAX_ATTEMPTS:-3}"
 MAX_TOTAL_ATTEMPTS="${RB_RALPH_MAX_TOTAL_ATTEMPTS:-12}"
@@ -175,6 +186,7 @@ usage() {
 Usage:
   rb-ralph [options]
   rb-ralph --wizard
+  rb-ralph --login
   rb-ralph profile list|show <name>|delete <name>|path
 
 Quick start:
@@ -211,6 +223,11 @@ Quick start:
   # Use one custom adapter command for both independent calls
   rb-ralph --project . --agent-cmd /path/to/adapter
 
+  # Configure and use native APIs without routing through another model CLI
+  rb-ralph --login
+  rb-ralph --project . --provider deepseek --model deepseek-v4-pro \
+    --credential pessoal --yolo --dashboard
+
 The executor is primary. Unless --manager-provider or --manager-cmd is given,
 the manager inherits the executor's provider/command and model configuration.
 Executor and manager are always separate ephemeral calls; no chat session is
@@ -219,9 +236,13 @@ Token counts come from provider telemetry. Costs are provider-reported when
 available or estimated only with --pricing-file; unavailable values stay clear.
 RB Ralph defaults to YOLO: provider permission checks and sandboxes are bypassed.
 Use --protected explicitly when the project or machine is not fully trusted.
+CLI providers: codex, claude, opencode. Direct API providers: openai,
+anthropic, gemini, deepseek, minimax, openrouter. Direct API executors require
+an explicit model and --yolo; their managers remain read-only.
 
 Options:
   --wizard              Start the interactive command builder
+  --login               Configure shared direct-API credentials interactively
   --profile <name>       Load a built-in or user execution profile
   --project <path>       Project root (default: current directory)
   --plan <id-or-path>    Execution-plan artifact ID or manifest path
@@ -229,15 +250,18 @@ Options:
   --core-cli <path>      RB Harness contract CLI (highest discovery precedence)
   --agent-cmd <command>  Executable that reads an implementation prompt on stdin
   --manager-cmd <cmd>    Executable that reads a review prompt on stdin
-  --provider <name>      Shared codex, claude, or opencode provider
-  --agent-provider <n>   Built-in codex, claude, or opencode executor
-  --manager-provider <n> Built-in codex, claude, or opencode manager
+  --provider <name>      Shared CLI or direct API provider
+  --agent-provider <n>   Executor provider (CLI or direct API)
+  --manager-provider <n> Manager provider (CLI or direct API)
   --model <id>           Shared model for executor and manager
   --agent-model <id>     Executor model; manager inherits with the same adapter
   --manager-model <id>   Explicit manager model override
   --effort <level>       Shared reasoning effort for executor and manager
   --agent-effort <level> Executor effort; manager inherits with the same adapter
   --manager-effort <lvl> Explicit manager reasoning-effort override
+  --credential <ref>     Shared saved direct-API credential ID or label
+  --agent-credential <r> Executor saved credential override
+  --manager-credential <r> Manager saved credential override
   --max-attempts <n>     No-progress attempts before strategy recovery (default: 3)
   --max-total-attempts N Hard phase safety cap per invocation (default: 12; 0 disables)
   --max-strategy-resets N Recovery escalations before pausing (default: 1)
@@ -286,6 +310,7 @@ Environment equivalents:
   RB_RALPH_AGENT_PROVIDER, RB_RALPH_MANAGER_PROVIDER,
   RB_RALPH_MODEL, RB_RALPH_AGENT_MODEL, RB_RALPH_MANAGER_MODEL,
   RB_RALPH_EFFORT, RB_RALPH_AGENT_EFFORT, RB_RALPH_MANAGER_EFFORT,
+  RB_RALPH_CREDENTIAL, RB_RALPH_AGENT_CREDENTIAL, RB_RALPH_MANAGER_CREDENTIAL,
   RB_RALPH_MAX_ATTEMPTS, RB_RALPH_MAX_TOTAL_ATTEMPTS,
   RB_RALPH_MAX_STRATEGY_RESETS, RB_RALPH_MAX_MANAGER_RETRIES,
   RB_RALPH_MANAGER_RETRY_WAIT, RB_RALPH_MAX_INCOMPLETE_RETRIES,
@@ -468,10 +493,18 @@ resolve_core_cli() {
   CORE_CLI="$candidate"
 }
 
+is_direct_provider() {
+  case "$1" in
+    openai|anthropic|gemini|deepseek|minimax|openrouter) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 provider_command() {
   case "$1" in
     codex|claude|opencode) printf '%s/adapters/%s.sh\n' "$RB_RALPH_HOME" "$1" ;;
-    *) die "Unsupported provider '$1'; use codex, claude, opencode, or a custom adapter command" ;;
+    openai|anthropic|gemini|deepseek|minimax|openrouter) printf '%s/adapters/api.sh\n' "$RB_RALPH_HOME" ;;
+    *) die "Unsupported provider '$1'; use codex, claude, opencode, openai, anthropic, gemini, deepseek, minimax, openrouter, or a custom adapter command" ;;
   esac
 }
 
@@ -511,9 +544,47 @@ preflight_provider() {
     codex) binary="${RB_RALPH_CODEX_BIN:-codex}" ;;
     claude) binary="${RB_RALPH_CLAUDE_BIN:-claude}" ;;
     opencode) binary="${RB_RALPH_OPENCODE_BIN:-opencode}" ;;
+    openai|anthropic|gemini|deepseek|minimax|openrouter)
+      [ -n "$CORE_CLI" ] || die "$role direct API provider requires the packaged RB Harness core"
+      return 0
+      ;;
     "") return 0 ;;
   esac
   resolve_command "$binary" "$role $provider CLI"
+}
+
+configure_credentials() {
+  local manager_explicit=0 same_adapter=0
+  AGENT_CREDENTIAL="$ENV_AGENT_CREDENTIAL"
+  MANAGER_CREDENTIAL="$ENV_MANAGER_CREDENTIAL"
+  [ -z "$MANAGER_CREDENTIAL" ] || manager_explicit=1
+  if [ -n "$ENV_SHARED_CREDENTIAL" ]; then
+    AGENT_CREDENTIAL="$ENV_SHARED_CREDENTIAL"
+    MANAGER_CREDENTIAL="$ENV_SHARED_CREDENTIAL"
+    manager_explicit=1
+  fi
+  if [ "$CLI_SHARED_CREDENTIAL_SET" -eq 1 ]; then
+    AGENT_CREDENTIAL="$CLI_SHARED_CREDENTIAL"
+    MANAGER_CREDENTIAL="$CLI_SHARED_CREDENTIAL"
+    manager_explicit=1
+  fi
+  [ "$CLI_AGENT_CREDENTIAL_SET" -eq 0 ] || AGENT_CREDENTIAL="$CLI_AGENT_CREDENTIAL"
+  if [ "$CLI_MANAGER_CREDENTIAL_SET" -eq 1 ]; then
+    MANAGER_CREDENTIAL="$CLI_MANAGER_CREDENTIAL"
+    manager_explicit=1
+  fi
+  if [ -n "$AGENT_PROVIDER" ] && [ "$AGENT_PROVIDER" = "$MANAGER_PROVIDER" ]; then
+    same_adapter=1
+  elif [ -z "$AGENT_PROVIDER" ] && [ -z "$MANAGER_PROVIDER" ] && [ "$AGENT_CMD" = "$MANAGER_CMD" ]; then
+    same_adapter=1
+  fi
+  if [ "$manager_explicit" -eq 0 ] && [ "$same_adapter" -eq 1 ]; then MANAGER_CREDENTIAL="$AGENT_CREDENTIAL"; fi
+  if ! is_direct_provider "$AGENT_PROVIDER" && [ -n "$AGENT_CREDENTIAL" ]; then
+    die "executor --credential is valid only with a direct API provider"
+  fi
+  if ! is_direct_provider "$MANAGER_PROVIDER" && [ -n "$MANAGER_CREDENTIAL" ]; then
+    die "manager --credential is valid only with a direct API provider"
+  fi
 }
 
 configure_models() {
@@ -653,6 +724,16 @@ configure_roles() {
   resolve_command "$MANAGER_CMD" "manager command"
   configure_models
   configure_efforts
+  configure_credentials
+  if is_direct_provider "$AGENT_PROVIDER" && [ -z "$AGENT_MODEL" ]; then
+    die "direct API executor $AGENT_PROVIDER requires --agent-model or --model"
+  fi
+  if is_direct_provider "$MANAGER_PROVIDER" && [ -z "$MANAGER_MODEL" ]; then
+    die "direct API manager $MANAGER_PROVIDER requires --manager-model or --model"
+  fi
+  if is_direct_provider "$AGENT_PROVIDER" && [ "$PERMISSION_MODE" = "protected" ]; then
+    die "direct API executors cannot provide an OS sandbox in --protected mode; use --yolo or a sandboxed codex/claude/opencode CLI provider"
+  fi
   preflight_provider "$AGENT_PROVIDER" executor
   preflight_provider "$MANAGER_PROVIDER" manager
 }
@@ -973,6 +1054,10 @@ invoke_agent() {
     RB_RALPH_ATTEMPT="$attempt" \
     RB_RALPH_AGENT_EVIDENCE_DIR="$submission_dir" \
     RB_RALPH_TELEMETRY_FILE="$temporary_telemetry" \
+    RB_RALPH_DIRECT_API_CORE="$CORE_CLI" \
+    RB_RALPH_PROVIDER="$AGENT_PROVIDER" \
+    RB_RALPH_CREDENTIAL="$AGENT_CREDENTIAL" \
+    RB_RALPH_ARTIFACTS_DIR="$ARTIFACTS_RELATIVE" \
     RB_RALPH_MODEL="$AGENT_MODEL" \
     RB_RALPH_AGENT_MODEL="$AGENT_MODEL" \
     RB_RALPH_MANAGER_MODEL="$MANAGER_MODEL" \
@@ -1034,6 +1119,10 @@ invoke_manager() {
     RB_RALPH_CHANGED_PATHS_FILE="$CHANGED_PATHS_FILE" \
     RB_RALPH_AGENT_EXIT_CODE="$agent_rc" \
     RB_RALPH_TELEMETRY_FILE="$temporary_telemetry" \
+    RB_RALPH_DIRECT_API_CORE="$CORE_CLI" \
+    RB_RALPH_PROVIDER="$MANAGER_PROVIDER" \
+    RB_RALPH_CREDENTIAL="$MANAGER_CREDENTIAL" \
+    RB_RALPH_ARTIFACTS_DIR="$ARTIFACTS_RELATIVE" \
     RB_RALPH_MODEL="$MANAGER_MODEL" \
     RB_RALPH_AGENT_MODEL="$AGENT_MODEL" \
     RB_RALPH_MANAGER_MODEL="$MANAGER_MODEL" \
@@ -1729,6 +1818,16 @@ expand_profile_arguments() {
           index=$((index + skip_value + 1)); continue
         fi
         ;;
+      --agent-credential)
+        if argument_list_has --credential "${remaining_args[@]}" || argument_list_has --agent-credential "${remaining_args[@]}"; then
+          index=$((index + skip_value + 1)); continue
+        fi
+        ;;
+      --manager-credential)
+        if argument_list_has --credential "${remaining_args[@]}" || argument_list_has --manager-credential "${remaining_args[@]}"; then
+          index=$((index + skip_value + 1)); continue
+        fi
+        ;;
     esac
     merged_args+=("$profile_flag")
     [ "$skip_value" -eq 0 ] || merged_args+=("$value")
@@ -1779,9 +1878,9 @@ wizard_append_value() {
 }
 
 wizard_append_role() {
-  local role="$1" label provider command model effort
+  local role="$1" label provider command model effort credential
   if [ "$role" = "agent" ]; then label="executor"; else label="gerente"; fi
-  wizard_choice "Provider do $label (codex/claude/opencode/custom)" "codex" "codex claude opencode custom"
+  wizard_choice "Provider do $label (codex/claude/opencode/openai/anthropic/gemini/deepseek/minimax/openrouter/custom)" "codex" "codex claude opencode openai anthropic gemini deepseek minimax openrouter custom"
   provider="$WIZARD_REPLY"
   if [ "$provider" = "custom" ]; then
     wizard_read "Comando do adapter do $label" ""
@@ -1793,10 +1892,20 @@ wizard_append_role() {
   fi
   wizard_read "Modelo do $label (vazio usa o padrão do provider)" ""
   model="$WIZARD_REPLY"
+  if is_direct_provider "$provider" && [ -z "$model" ]; then
+    printf 'Providers de API direta exigem o ID explícito do modelo.\n' >&2
+    return 1
+  fi
   [ -z "$model" ] || wizard_append_value "--${role}-model" "$model"
   wizard_read "Effort do $label (vazio usa o padrão do provider)" ""
   effort="$WIZARD_REPLY"
   [ -z "$effort" ] || wizard_append_value "--${role}-effort" "$effort"
+  if is_direct_provider "$provider"; then
+    wizard_read "Credencial salva do $label (ID/rótulo; vazio usa a padrão)" ""
+    credential="$WIZARD_REPLY"
+    [ -z "$credential" ] || wizard_append_value "--${role}-credential" "$credential"
+    printf '  Dica: rb-ralph --login configura o cofre compartilhado.\n'
+  fi
 }
 
 wizard_print_command() {
@@ -1987,6 +2096,13 @@ if [ "${1:-}" = "--wizard" ]; then
   exit 0
 fi
 
+if [ "${1:-}" = "--login" ]; then
+  [ "$#" -eq 1 ] || die "--login does not accept credentials or provider options on the command line; answer them interactively"
+  resolve_core_cli
+  core_cli_call auth login
+  exit $?
+fi
+
 EXPANDED_ARGS=()
 expand_profile_arguments "$@"
 set -- "${EXPANDED_ARGS[@]}"
@@ -2026,19 +2142,19 @@ while [ "$#" -gt 0 ]; do
       shift 2
       ;;
     --provider)
-      [ "$#" -ge 2 ] || die "--provider requires codex, claude, or opencode"
+      [ "$#" -ge 2 ] || die "--provider requires a supported CLI or direct API provider"
       SHARED_PROVIDER="$2"
       SHARED_PROVIDER_SET=1
       shift 2
       ;;
     --agent-provider)
-      [ "$#" -ge 2 ] || die "--agent-provider requires codex, claude, or opencode"
+      [ "$#" -ge 2 ] || die "--agent-provider requires a supported CLI or direct API provider"
       CLI_AGENT_PROVIDER="$2"
       CLI_AGENT_PROVIDER_SET=1
       shift 2
       ;;
     --manager-provider)
-      [ "$#" -ge 2 ] || die "--manager-provider requires codex, claude, or opencode"
+      [ "$#" -ge 2 ] || die "--manager-provider requires a supported CLI or direct API provider"
       CLI_MANAGER_PROVIDER="$2"
       CLI_MANAGER_PROVIDER_SET=1
       shift 2
@@ -2077,6 +2193,24 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -ge 2 ] && [ -n "$2" ] || die "--manager-effort requires a reasoning-effort level"
       CLI_MANAGER_EFFORT="$2"
       CLI_MANAGER_EFFORT_SET=1
+      shift 2
+      ;;
+    --credential)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || die "--credential requires a saved credential ID or label"
+      CLI_SHARED_CREDENTIAL="$2"
+      CLI_SHARED_CREDENTIAL_SET=1
+      shift 2
+      ;;
+    --agent-credential)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || die "--agent-credential requires a saved credential ID or label"
+      CLI_AGENT_CREDENTIAL="$2"
+      CLI_AGENT_CREDENTIAL_SET=1
+      shift 2
+      ;;
+    --manager-credential)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || die "--manager-credential requires a saved credential ID or label"
+      CLI_MANAGER_CREDENTIAL="$2"
+      CLI_MANAGER_CREDENTIAL_SET=1
       shift 2
       ;;
     --max-attempts)

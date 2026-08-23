@@ -119,6 +119,7 @@ install -m 0755 "$SOURCE_ROOT/adapters/adapter-utils.sh" "$INSTALL_HOME/adapters
 install -m 0755 "$SOURCE_ROOT/adapters/codex.sh" "$INSTALL_HOME/adapters/codex.sh"
 install -m 0755 "$SOURCE_ROOT/adapters/claude.sh" "$INSTALL_HOME/adapters/claude.sh"
 install -m 0755 "$SOURCE_ROOT/adapters/opencode.sh" "$INSTALL_HOME/adapters/opencode.sh"
+install -m 0755 "$SOURCE_ROOT/adapters/api.sh" "$INSTALL_HOME/adapters/api.sh"
 install -m 0755 "$SOURCE_ROOT/lib/evidence.cjs" "$INSTALL_HOME/lib/evidence.cjs"
 install -m 0755 "$SOURCE_ROOT/lib/control-plane.cjs" "$INSTALL_HOME/lib/control-plane.cjs"
 install -m 0755 "$SOURCE_ROOT/lib/provider-telemetry.cjs" "$INSTALL_HOME/lib/provider-telemetry.cjs"
