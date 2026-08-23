@@ -124,7 +124,7 @@ Confirm the exact source or installed build at any time with:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.8.1
+# RB Ralph 0.8.2
 ```
 
 The installer prints and copies the same `VERSION` marker, so a source upgrade
@@ -725,6 +725,9 @@ rb-harness auth list
 rb-ralph provider list
 rb-ralph provider list --json
 
+# Interactive: choose a configured API/credential, model, effort and timeout
+rb-ralph provider test
+
 rb-ralph provider test --provider deepseek \
   --model deepseek-v4-pro --credential pessoal --timeout 60
 
@@ -742,6 +745,11 @@ so both executables read the same provider registry and credential vault.
 The test performs one bounded `PING`/`PONG` API request only: it does not create
 a Ralph run, discover a plan, invoke an executor/manager, or modify the project.
 Use `--json` for the safe versioned diagnostic response.
+With provider or model omitted in an interactive terminal, Ralph exposes the
+same guided test wizard as Harness. It lists only configured APIs, selects safe
+credential metadata, asks for model, optional effort and timeout, prints an
+equivalent `rb-ralph` command, and confirms before sending the request.
+Non-interactive callers must continue supplying provider and model explicitly.
 Credential selection accepts the full ID printed by `provider list`, its
 original label, or the normalized slug after the provider prefix.
 

@@ -227,6 +227,7 @@ Quick start:
   # Configure and use native APIs without routing through another model CLI
   rb-ralph --login
   rb-ralph provider list
+  rb-ralph provider test
   rb-ralph provider test --provider deepseek --model deepseek-v4-pro \
     --credential pessoal
   rb-ralph --project . --provider deepseek --model deepseek-v4-pro \
@@ -2093,7 +2094,7 @@ if [ "${1:-}" = "provider" ]; then
   case "${2:-}" in
     list|test)
       resolve_core_cli
-      core_cli_call "$@"
+      RB_PROVIDER_CLI_NAME=rb-ralph core_cli_call "$@"
       exit $?
       ;;
     *) die "provider requires list or test" ;;

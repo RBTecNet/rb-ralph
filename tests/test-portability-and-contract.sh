@@ -226,6 +226,11 @@ RB_RALPH_CORE_CLI=/bin/echo "$RALPH" provider test --provider deepseek \
   --model deepseek-v4-pro --credential pessoal > "$TEMP_ROOT/provider-test-delegation.out"
 assert_contains "$TEMP_ROOT/provider-test-delegation.out" "provider test --provider deepseek" \
   "Ralph provider test delegates to the shared API connection probe"
+RB_RALPH_CORE_CLI=/bin/echo "$RALPH" provider test > "$TEMP_ROOT/provider-test-wizard-delegation.out"
+assert_contains "$TEMP_ROOT/provider-test-wizard-delegation.out" "provider test" \
+  "Ralph provider test without options delegates to the shared guided wizard"
+assert_contains "$PACKAGE_ROOT/bin/rb-ralph" 'RB_PROVIDER_CLI_NAME=rb-ralph core_cli_call "$@"' \
+  "Ralph identifies itself to shared provider diagnostics"
 assert_contains "$PACKAGE_ROOT/bin/rb-ralph" '╰──◡◡──╯          RALPH · capivara de plantão' \
   "static brand preserves Ralph the capybara"
 assert_contains "$PACKAGE_ROOT/lib/dashboard.cjs" '╰──◡◡──╯${" ".repeat(10)}RALPH · capivara de plantão' \
