@@ -45,6 +45,9 @@ ENV_MANAGER_PROVIDER="${RB_RALPH_MANAGER_PROVIDER:-}"
 ENV_SHARED_MODEL="${RB_RALPH_MODEL:-}"
 ENV_AGENT_MODEL="${RB_RALPH_AGENT_MODEL:-}"
 ENV_MANAGER_MODEL="${RB_RALPH_MANAGER_MODEL:-}"
+ENV_SHARED_EFFORT="${RB_RALPH_EFFORT:-}"
+ENV_AGENT_EFFORT="${RB_RALPH_AGENT_EFFORT:-}"
+ENV_MANAGER_EFFORT="${RB_RALPH_MANAGER_EFFORT:-}"
 SHARED_PROVIDER=""
 CLI_AGENT_CMD=""
 CLI_MANAGER_CMD=""
@@ -61,12 +64,20 @@ CLI_MANAGER_MODEL=""
 CLI_SHARED_MODEL_SET=0
 CLI_AGENT_MODEL_SET=0
 CLI_MANAGER_MODEL_SET=0
+CLI_SHARED_EFFORT=""
+CLI_AGENT_EFFORT=""
+CLI_MANAGER_EFFORT=""
+CLI_SHARED_EFFORT_SET=0
+CLI_AGENT_EFFORT_SET=0
+CLI_MANAGER_EFFORT_SET=0
 AGENT_CMD=""
 MANAGER_CMD=""
 AGENT_PROVIDER=""
 MANAGER_PROVIDER=""
 AGENT_MODEL=""
 MANAGER_MODEL=""
+AGENT_EFFORT=""
+MANAGER_EFFORT=""
 MANAGER_INHERITS_AGENT=0
 MAX_ATTEMPTS="${RB_RALPH_MAX_ATTEMPTS:-3}"
 MAX_TOTAL_ATTEMPTS="${RB_RALPH_MAX_TOTAL_ATTEMPTS:-12}"
@@ -173,8 +184,8 @@ Quick start:
   rb-ralph-watch --project /path/to/project
 
   # Use a different manager explicitly
-  rb-ralph --project . --agent-provider claude --agent-model sonnet \
-    --manager-provider codex --manager-model gpt-5.6-sol
+  rb-ralph --project . --agent-provider claude --agent-model sonnet --agent-effort high \
+    --manager-provider codex --manager-model gpt-5.6-sol --manager-effort xhigh
 
   # Select different models exposed through OpenCode
   rb-ralph --project . --provider opencode \
@@ -204,6 +215,9 @@ Options:
   --model <id>           Shared model for executor and manager
   --agent-model <id>     Executor model; manager inherits with the same adapter
   --manager-model <id>   Explicit manager model override
+  --effort <level>       Shared reasoning effort for executor and manager
+  --agent-effort <level> Executor effort; manager inherits with the same adapter
+  --manager-effort <lvl> Explicit manager reasoning-effort override
   --max-attempts <n>     No-progress attempts before strategy recovery (default: 3)
   --max-total-attempts N Hard phase safety cap per invocation (default: 12; 0 disables)
   --max-strategy-resets N Recovery escalations before pausing (default: 1)
@@ -248,6 +262,7 @@ Environment equivalents:
   RB_RALPH_HOME, RB_RALPH_CORE_CLI, RB_RALPH_AGENT_CMD, RB_RALPH_MANAGER_CMD,
   RB_RALPH_AGENT_PROVIDER, RB_RALPH_MANAGER_PROVIDER,
   RB_RALPH_MODEL, RB_RALPH_AGENT_MODEL, RB_RALPH_MANAGER_MODEL,
+  RB_RALPH_EFFORT, RB_RALPH_AGENT_EFFORT, RB_RALPH_MANAGER_EFFORT,
   RB_RALPH_MAX_ATTEMPTS, RB_RALPH_MAX_TOTAL_ATTEMPTS,
   RB_RALPH_MAX_STRATEGY_RESETS, RB_RALPH_MAX_MANAGER_RETRIES,
   RB_RALPH_MANAGER_RETRY_WAIT, RB_RALPH_MAX_INCOMPLETE_RETRIES,
@@ -273,7 +288,9 @@ Provider command protocol:
   submission directory; orchestrator-owned logs under .rb/runs are never
   exposed as writable executor output.
   Every call receives RB_RALPH_TELEMETRY_FILE for an optional
-  rb-ralph-usage/v1 record, plus RB_RALPH_PERMISSION_MODE and RB_RALPH_YOLO.
+  rb-ralph-usage/v1 record, RB_RALPH_MODEL and RB_RALPH_EFFORT for the current
+  call, both resolved role model/effort values, plus RB_RALPH_PERMISSION_MODE
+  and RB_RALPH_YOLO.
   Custom adapters must honor protected mode or fail clearly if unsupported.
   Manager adapters also receive RB_RALPH_VALIDATION_LOG,
   RB_RALPH_EVIDENCE_INDEX, RB_RALPH_CHANGED_PATHS_FILE, RB_RALPH_AGENT_EXIT_CODE, and
@@ -447,6 +464,24 @@ provider_configured_model() {
   esac
 }
 
+provider_configured_effort() {
+  local provider="$1" role="$2"
+  case "$provider:$role" in
+    codex:agent) printf '%s' "${RB_RALPH_CODEX_AGENT_EFFORT:-${RB_RALPH_CODEX_EFFORT:-}}" ;;
+    codex:manager) printf '%s' "${RB_RALPH_CODEX_MANAGER_EFFORT:-${RB_RALPH_CODEX_EFFORT:-}}" ;;
+    claude:agent) printf '%s' "${RB_RALPH_CLAUDE_AGENT_EFFORT:-${RB_RALPH_CLAUDE_EFFORT:-}}" ;;
+    claude:manager) printf '%s' "${RB_RALPH_CLAUDE_MANAGER_EFFORT:-${RB_RALPH_CLAUDE_EFFORT:-}}" ;;
+    opencode:agent) printf '%s' "${RB_RALPH_OPENCODE_AGENT_EFFORT:-${RB_RALPH_OPENCODE_EFFORT:-}}" ;;
+    opencode:manager) printf '%s' "${RB_RALPH_OPENCODE_MANAGER_EFFORT:-${RB_RALPH_OPENCODE_EFFORT:-}}" ;;
+  esac
+}
+
+validate_effort() {
+  local role="$1" value="$2"
+  [ -z "$value" ] || [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || \
+    die "$role effort must be a provider-supported token containing only letters, numbers, dot, underscore, or hyphen"
+}
+
 preflight_provider() {
   local provider="$1" role="$2" binary=""
   case "$provider" in
@@ -493,6 +528,45 @@ configure_models() {
   if [ "$manager_explicit" -eq 0 ] && [ "$same_adapter" -eq 1 ]; then
     MANAGER_MODEL="$AGENT_MODEL"
   fi
+}
+
+configure_efforts() {
+  local manager_explicit=0 same_adapter=0
+  AGENT_EFFORT="$(provider_configured_effort "$AGENT_PROVIDER" agent)"
+  MANAGER_EFFORT="$(provider_configured_effort "$MANAGER_PROVIDER" manager)"
+  [ -z "$MANAGER_EFFORT" ] || manager_explicit=1
+
+  if [ -n "$ENV_SHARED_EFFORT" ]; then
+    AGENT_EFFORT="$ENV_SHARED_EFFORT"
+    MANAGER_EFFORT="$ENV_SHARED_EFFORT"
+    manager_explicit=1
+  fi
+  [ -z "$ENV_AGENT_EFFORT" ] || AGENT_EFFORT="$ENV_AGENT_EFFORT"
+  if [ -n "$ENV_MANAGER_EFFORT" ]; then
+    MANAGER_EFFORT="$ENV_MANAGER_EFFORT"
+    manager_explicit=1
+  fi
+  if [ "$CLI_SHARED_EFFORT_SET" -eq 1 ]; then
+    AGENT_EFFORT="$CLI_SHARED_EFFORT"
+    MANAGER_EFFORT="$CLI_SHARED_EFFORT"
+    manager_explicit=1
+  fi
+  [ "$CLI_AGENT_EFFORT_SET" -eq 0 ] || AGENT_EFFORT="$CLI_AGENT_EFFORT"
+  if [ "$CLI_MANAGER_EFFORT_SET" -eq 1 ]; then
+    MANAGER_EFFORT="$CLI_MANAGER_EFFORT"
+    manager_explicit=1
+  fi
+
+  if [ -n "$AGENT_PROVIDER" ] && [ "$AGENT_PROVIDER" = "$MANAGER_PROVIDER" ]; then
+    same_adapter=1
+  elif [ -z "$AGENT_PROVIDER" ] && [ -z "$MANAGER_PROVIDER" ] && [ "$AGENT_CMD" = "$MANAGER_CMD" ]; then
+    same_adapter=1
+  fi
+  if [ "$manager_explicit" -eq 0 ] && [ "$same_adapter" -eq 1 ]; then
+    MANAGER_EFFORT="$AGENT_EFFORT"
+  fi
+  validate_effort executor "$AGENT_EFFORT"
+  validate_effort manager "$MANAGER_EFFORT"
 }
 
 configure_roles() {
@@ -555,6 +629,7 @@ configure_roles() {
   resolve_command "$AGENT_CMD" "agent command"
   resolve_command "$MANAGER_CMD" "manager command"
   configure_models
+  configure_efforts
   preflight_provider "$AGENT_PROVIDER" executor
   preflight_provider "$MANAGER_PROVIDER" manager
 }
@@ -658,7 +733,7 @@ open_finding_has_same_evidence() {
 manager_failure_summary() {
   local log_file="$1" exit_code="$2" provider="$3" model="$4"
   local label log_reference go_model
-  label="$(dashboard_role_label "$provider" "$MANAGER_CMD" "$model")"
+  label="$(dashboard_role_label "$provider" "$MANAGER_CMD" "$model" "$MANAGER_EFFORT")"
   log_reference="${log_file#"$PROJECT/"}"
 
   if grep -Fq 'RB_RALPH_PROCESS_STATUS: TIMEOUT' "$log_file"; then
@@ -847,7 +922,7 @@ invoke_agent() {
   temporary_telemetry="$capture_root/usage.json"
   live_status="$LOCK_DIR/live/$(basename "${output%.log}").json"
   mkdir -p "$submission_dir"
-  usage_placeholder "$temporary_telemetry" "${AGENT_PROVIDER:-custom}" agent "$task_id" "$AGENT_MODEL"
+  usage_placeholder "$temporary_telemetry" "${AGENT_PROVIDER:-custom}" agent "$task_id" "$AGENT_MODEL" "$AGENT_EFFORT"
   if (
     cd "$execution_root"
     RB_RALPH_ROLE="agent" \
@@ -862,6 +937,9 @@ invoke_agent() {
     RB_RALPH_MODEL="$AGENT_MODEL" \
     RB_RALPH_AGENT_MODEL="$AGENT_MODEL" \
     RB_RALPH_MANAGER_MODEL="$MANAGER_MODEL" \
+    RB_RALPH_EFFORT="$AGENT_EFFORT" \
+    RB_RALPH_AGENT_EFFORT="$AGENT_EFFORT" \
+    RB_RALPH_MANAGER_EFFORT="$MANAGER_EFFORT" \
     RB_RALPH_PERMISSION_MODE="$PERMISSION_MODE" \
     RB_RALPH_YOLO="$(if [ "$PERMISSION_MODE" = yolo ]; then printf 1; else printf 0; fi)" \
     node "$PROCESS_SUPERVISOR" \
@@ -900,7 +978,7 @@ invoke_manager() {
   provider_output="$capture_root/provider.log"
   temporary_telemetry="$capture_root/usage.json"
   live_status="$LOCK_DIR/live/$(basename "${output%.log}").json"
-  usage_placeholder "$temporary_telemetry" "${MANAGER_PROVIDER:-custom}" manager "" "$MANAGER_MODEL"
+  usage_placeholder "$temporary_telemetry" "${MANAGER_PROVIDER:-custom}" manager "" "$MANAGER_MODEL" "$MANAGER_EFFORT"
   if (
     cd "$PROJECT"
     RB_RALPH_ROLE="manager" \
@@ -920,6 +998,9 @@ invoke_manager() {
     RB_RALPH_MODEL="$MANAGER_MODEL" \
     RB_RALPH_AGENT_MODEL="$AGENT_MODEL" \
     RB_RALPH_MANAGER_MODEL="$MANAGER_MODEL" \
+    RB_RALPH_EFFORT="$MANAGER_EFFORT" \
+    RB_RALPH_AGENT_EFFORT="$AGENT_EFFORT" \
+    RB_RALPH_MANAGER_EFFORT="$MANAGER_EFFORT" \
     RB_RALPH_PERMISSION_MODE="$PERMISSION_MODE" \
     RB_RALPH_YOLO="$(if [ "$PERMISSION_MODE" = yolo ]; then printf 1; else printf 0; fi)" \
     node "$PROCESS_SUPERVISOR" \
@@ -981,9 +1062,14 @@ dashboard_clean() {
 }
 
 dashboard_role_label() {
-  local provider="$1" command="$2" model="${3:-}" label
+  local provider="$1" command="$2" model="${3:-}" effort="${4:-}" label details=""
   if [ -n "$provider" ]; then label="$provider"; else label="$(basename "$command")"; fi
-  if [ -n "$model" ]; then printf '%s[%s]' "$label" "$model"; else printf '%s' "$label"; fi
+  if [ -n "$model" ]; then details="$model"; fi
+  if [ -n "$effort" ]; then
+    [ -z "$details" ] || details+="; "
+    details+="effort=$effort"
+  fi
+  if [ -n "$details" ]; then printf '%s[%s]' "$label" "$details"; else printf '%s' "$label"; fi
 }
 
 dashboard_find_phase_index() {
@@ -1054,10 +1140,10 @@ refresh_usage_summary() {
 }
 
 usage_placeholder() {
-  local path="$1" provider="$2" role="$3" task_id="${4:-}" model="${5:-unknown}"
+  local path="$1" provider="$2" role="$3" task_id="${4:-}" model="${5:-unknown}" effort="${6:-default}"
   RB_RALPH_ROLE="$role" RB_RALPH_PHASE_ID="$phase_id" RB_RALPH_TASK_ID="$task_id" \
     RB_RALPH_ATTEMPT="$attempt" \
-    node "$TELEMETRY_HELPER" placeholder "$path" "${provider:-custom}" "${model:-unknown}"
+    node "$TELEMETRY_HELPER" placeholder "$path" "${provider:-custom}" "${model:-unknown}" "${effort:-default}"
 }
 
 dashboard_state_init() {
@@ -1078,10 +1164,12 @@ dashboard_state_init() {
     printf 'META\tversion\t%s\n' "$(dashboard_clean "$RB_RALPH_VERSION")"
     printf 'META\texecution_id\t%s\n' "$DASHBOARD_EXECUTION_ID"
     printf 'META\troles\t%s executor / %s manager\n' \
-      "$(dashboard_role_label "$AGENT_PROVIDER" "$AGENT_CMD" "$AGENT_MODEL")" \
-      "$(dashboard_role_label "$MANAGER_PROVIDER" "$MANAGER_CMD" "$MANAGER_MODEL")"
+      "$(dashboard_role_label "$AGENT_PROVIDER" "$AGENT_CMD" "$AGENT_MODEL" "$AGENT_EFFORT")" \
+      "$(dashboard_role_label "$MANAGER_PROVIDER" "$MANAGER_CMD" "$MANAGER_MODEL" "$MANAGER_EFFORT")"
     printf 'META\tagent_model\t%s\n' "$(dashboard_clean "$AGENT_MODEL")"
     printf 'META\tmanager_model\t%s\n' "$(dashboard_clean "$MANAGER_MODEL")"
+    printf 'META\tagent_effort\t%s\n' "$(dashboard_clean "$AGENT_EFFORT")"
+    printf 'META\tmanager_effort\t%s\n' "$(dashboard_clean "$MANAGER_EFFORT")"
     printf 'META\tpermissions\t%s\n' "$PERMISSION_MODE"
     printf 'META\tagent_idle_timeout\t%s\n' "$AGENT_IDLE_TIMEOUT"
     printf 'META\tmanager_idle_timeout\t%s\n' "$MANAGER_IDLE_TIMEOUT"
@@ -1391,6 +1479,24 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -ge 2 ] && [ -n "$2" ] || die "--manager-model requires a model ID"
       CLI_MANAGER_MODEL="$2"
       CLI_MANAGER_MODEL_SET=1
+      shift 2
+      ;;
+    --effort)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || die "--effort requires a reasoning-effort level"
+      CLI_SHARED_EFFORT="$2"
+      CLI_SHARED_EFFORT_SET=1
+      shift 2
+      ;;
+    --agent-effort)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || die "--agent-effort requires a reasoning-effort level"
+      CLI_AGENT_EFFORT="$2"
+      CLI_AGENT_EFFORT_SET=1
+      shift 2
+      ;;
+    --manager-effort)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || die "--manager-effort requires a reasoning-effort level"
+      CLI_MANAGER_EFFORT="$2"
+      CLI_MANAGER_EFFORT_SET=1
       shift 2
       ;;
     --max-attempts)

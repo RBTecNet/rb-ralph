@@ -26,8 +26,8 @@ rb_run_provider() {
 }
 
 rb_run_provider_telemetry() {
-  local helper="$1" provider="$2" model="$3" telemetry_file="$4"
-  shift 4
+  local helper="$1" provider="$2" model="$3" effort="$4" telemetry_file="$5"
+  shift 5
   local output provider_rc retry_after normalized
   output="$(mktemp)"
   normalized="$(mktemp)"
@@ -37,7 +37,7 @@ rb_run_provider_telemetry() {
   provider_rc="${PIPESTATUS[0]}"
   set -e
 
-  if node "$helper" "$provider" "$output" "$telemetry_file" "${model:-unknown}" > "$normalized" 2>&1; then
+  if node "$helper" "$provider" "$output" "$telemetry_file" "${model:-unknown}" "${effort:-default}" > "$normalized" 2>&1; then
     cat "$normalized"
   else
     cat "$output"

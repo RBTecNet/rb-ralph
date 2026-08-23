@@ -22,10 +22,12 @@ command -v "$OPENCODE_BIN" >/dev/null 2>&1 || {
 case "$ROLE" in
   agent)
     MODEL="${RB_RALPH_MODEL:-${RB_RALPH_OPENCODE_AGENT_MODEL:-${RB_RALPH_OPENCODE_MODEL:-}}}"
+    EFFORT="${RB_RALPH_EFFORT:-${RB_RALPH_OPENCODE_AGENT_EFFORT:-${RB_RALPH_OPENCODE_EFFORT:-}}}"
     ROLE_PERMISSION="${RB_RALPH_OPENCODE_AGENT_PERMISSION:-}"
     ;;
   manager)
     MODEL="${RB_RALPH_MODEL:-${RB_RALPH_OPENCODE_MANAGER_MODEL:-${RB_RALPH_OPENCODE_MODEL:-}}}"
+    EFFORT="${RB_RALPH_EFFORT:-${RB_RALPH_OPENCODE_MANAGER_EFFORT:-${RB_RALPH_OPENCODE_EFFORT:-}}}"
     ROLE_PERMISSION="${RB_RALPH_OPENCODE_MANAGER_PERMISSION:-}"
     ;;
   *)
@@ -33,6 +35,11 @@ case "$ROLE" in
     exit 1
     ;;
 esac
+
+[ -z "$EFFORT" ] || [[ "$EFFORT" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || {
+  printf 'ERROR: unsupported OpenCode effort token: %s\n' "$EFFORT" >&2
+  exit 1
+}
 
 case "$RB_PERMISSION_MODE" in
   yolo|protected) ;;
@@ -45,6 +52,9 @@ esac
 ARGS=(run --dir "$PROJECT_ROOT")
 if [ -n "$MODEL" ]; then
   ARGS+=(--model "$MODEL")
+fi
+if [ -n "$EFFORT" ]; then
+  ARGS+=(--variant "$EFFORT")
 fi
 
 if [ "$RB_PERMISSION_MODE" = "yolo" ]; then

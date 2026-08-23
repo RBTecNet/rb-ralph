@@ -89,11 +89,12 @@ cat > "$MOCK_DRIVER" <<'MOCK'
 set -euo pipefail
 provider="${MOCK_PROVIDER:-custom}"
 cat > "$MOCK_STATE/${MOCK_RUN_TAG}-${provider}-${RB_RALPH_ROLE}.prompt"
-printf '%s|%s|agent_model=%s|manager_model=%s|args=%s|permission=%s|yolo=%s|model=%s|generic_agent_model=%s|generic_manager_model=%s\n' \
+printf '%s|%s|agent_model=%s|manager_model=%s|args=%s|permission=%s|yolo=%s|model=%s|generic_agent_model=%s|generic_manager_model=%s|effort=%s|generic_agent_effort=%s|generic_manager_effort=%s\n' \
   "$provider" "$RB_RALPH_ROLE" "${RB_RALPH_CODEX_AGENT_MODEL:-}" \
   "${RB_RALPH_CODEX_MANAGER_MODEL:-}" "$*" \
   "${RB_RALPH_PERMISSION_MODE:-missing}" "${RB_RALPH_YOLO:-missing}" \
   "${RB_RALPH_MODEL:-}" "${RB_RALPH_AGENT_MODEL:-}" "${RB_RALPH_MANAGER_MODEL:-}" \
+  "${RB_RALPH_EFFORT:-}" "${RB_RALPH_AGENT_EFFORT:-}" "${RB_RALPH_MANAGER_EFFORT:-}" \
   >> "$MOCK_STATE/roles.log"
 if [ "$RB_RALPH_ROLE" = "agent" ]; then
   mkdir -p src
@@ -342,6 +343,64 @@ assert_contains "$MOCK_STATE/roles.log" "model=vendor/custom-executor" \
 assert_contains "$MOCK_STATE/roles.log" \
   "generic_agent_model=vendor/custom-executor|generic_manager_model=vendor/custom-executor" \
   "custom manager inherits the executor model"
+
+# Reasoning effort follows the same provider-neutral precedence and inheritance
+# rules as model selection, while each built-in adapter translates it natively.
+: > "$MOCK_STATE/roles.log"
+SHARED_EFFORT_PROJECT="$(new_project effort-shared)"
+run_role_project effort-shared "$SHARED_EFFORT_PROJECT" \
+  --provider claude --effort high >/dev/null
+assert_contains "$MOCK_STATE/roles.log" "--effort high" \
+  "Claude receives the selected reasoning effort"
+assert_contains "$MOCK_STATE/roles.log" \
+  "generic_agent_effort=high|generic_manager_effort=high" \
+  "shared effort configures executor and manager"
+
+: > "$MOCK_STATE/roles.log"
+CODEX_EFFORT_PROJECT="$(new_project effort-codex-roles)"
+run_role_project effort-codex-roles "$CODEX_EFFORT_PROJECT" --provider codex \
+  --agent-effort medium --manager-effort xhigh >/dev/null
+assert_contains "$MOCK_STATE/roles.log" 'model_reasoning_effort="medium"' \
+  "Codex executor effort is translated to model_reasoning_effort"
+assert_contains "$MOCK_STATE/roles.log" 'model_reasoning_effort="xhigh"' \
+  "Codex manager receives its independent effort"
+
+: > "$MOCK_STATE/roles.log"
+OPENCODE_EFFORT_PROJECT="$(new_project effort-opencode)"
+run_role_project effort-opencode "$OPENCODE_EFFORT_PROJECT" \
+  --provider opencode --effort max >/dev/null
+assert_contains "$MOCK_STATE/roles.log" "--variant max" \
+  "OpenCode receives effort through its provider variant"
+
+: > "$MOCK_STATE/roles.log"
+CUSTOM_EFFORT_PROJECT="$(new_project effort-custom-contract)"
+run_role_project effort-custom-contract "$CUSTOM_EFFORT_PROJECT" \
+  --agent-cmd "$MOCK_DRIVER" --agent-effort high >/dev/null
+assert_contains "$MOCK_STATE/roles.log" \
+  "effort=high|generic_agent_effort=high|generic_manager_effort=high" \
+  "custom adapters receive current and resolved role efforts"
+
+: > "$MOCK_STATE/roles.log"
+MIXED_EFFORT_PROJECT="$(new_project effort-mixed-providers)"
+run_role_project effort-mixed-providers "$MIXED_EFFORT_PROJECT" \
+  --agent-provider claude --agent-effort high --manager-provider codex >/dev/null
+assert_contains "$MOCK_STATE/roles.log" \
+  "generic_agent_effort=high|generic_manager_effort=" \
+  "an explicitly different provider does not inherit executor effort"
+
+: > "$MOCK_STATE/roles.log"
+PROVIDER_EFFORT_PROJECT="$(new_project effort-provider-environment)"
+RB_RALPH_CODEX_AGENT_EFFORT=low run_role_project effort-provider-environment \
+  "$PROVIDER_EFFORT_PROJECT" --agent-provider codex >/dev/null
+assert_contains "$MOCK_STATE/roles.log" \
+  "generic_agent_effort=low|generic_manager_effort=low" \
+  "provider-specific executor effort remains compatible and is inherited"
+
+UNSAFE_EFFORT_PROJECT="$(new_project effort-unsafe)"
+expect_failure "$TEMP_ROOT/unsafe-effort.out" \
+  "$RALPH" --project "$UNSAFE_EFFORT_PROJECT" --agent-cmd "$MOCK_DRIVER" --effort 'high value'
+assert_contains "$TEMP_ROOT/unsafe-effort.out" "effort must be a provider-supported token" \
+  "unsafe effort values fail before invoking a provider"
 
 # YOLO is the shared default; protected mode is explicit and reaches built-in
 # and custom adapters through the provider-neutral environment contract.
@@ -967,7 +1026,8 @@ TELEMETRY_PROJECT="$(new_project telemetry-dashboard)"
 RB_RALPH_CODEX_BIN="$TEMP_ROOT/telemetry-codex" \
 RB_RALPH_CODEX_AGENT_MODEL=priced-model \
   "$RALPH" --project "$TELEMETRY_PROJECT" --validation-mode manager --max-attempts 1 \
-  --agent-provider codex --pricing-file "$TEMP_ROOT/pricing.json" > "$TEMP_ROOT/telemetry-run.out"
+  --agent-provider codex --agent-effort high --manager-effort xhigh \
+  --pricing-file "$TEMP_ROOT/pricing.json" > "$TEMP_ROOT/telemetry-run.out"
 TELEMETRY_RUN="$(basename "$(find "$TELEMETRY_PROJECT/.rb/runs" -mindepth 1 -maxdepth 1 -type d -print -quit)")"
 RB_RALPH_WATCH_COLS=120 RB_RALPH_WATCH_LINES=50 \
   "$PACKAGE_ROOT/bin/rb-ralph-watch" --project "$TELEMETRY_PROJECT" --run "$TELEMETRY_RUN" \
@@ -984,8 +1044,9 @@ assert_contains "$TEMP_ROOT/dashboard.out" "G0 ✓  G1 ✓  G2 ⊘  G3 ✓" \
   "dashboard exposes all executor, evidence, validation, and manager gates"
 assert_contains "$TEMP_ROOT/dashboard.out" "ACESSO YOLO" \
   "dashboard makes unrestricted execution visible"
-assert_contains "$TEMP_ROOT/dashboard.out" "codex[priced-model] executor / codex[priced-model] manager" \
-  "dashboard identifies the effective model for each role"
+assert_contains "$TEMP_ROOT/dashboard.out" \
+  "codex[priced-model; effort=high] executor / codex[priced-model; effort=xhigh] manager" \
+  "dashboard identifies the effective model and effort for each role"
 assert_contains "$TEMP_ROOT/dashboard.out" "RALPH · capivara de plantão" \
   "wide dashboard renders the RB Ralph mascot"
 assert_contains "$TEMP_ROOT/dashboard.out" "v$PACKAGE_VERSION" \
@@ -1068,11 +1129,13 @@ cat > "$TEMP_ROOT/claude-raw.json" <<'CLAUDE_JSON'
 CLAUDE_JSON
 RB_RALPH_ROLE=manager RB_RALPH_PHASE_ID=P99 RB_RALPH_ATTEMPT=1 \
   node "$PACKAGE_ROOT/lib/provider-telemetry.cjs" claude "$TEMP_ROOT/claude-raw.json" \
-  "$TEMP_ROOT/claude.usage.json" claude-test > "$TEMP_ROOT/claude-normalized.out"
+  "$TEMP_ROOT/claude.usage.json" claude-test high > "$TEMP_ROOT/claude-normalized.out"
 assert_contains "$TEMP_ROOT/claude-normalized.out" "claude normalized output" \
   "Claude JSON result is normalized for the manager protocol"
 assert_contains "$TEMP_ROOT/claude.usage.json" '"costSource": "provider"' \
   "provider-reported Claude cost is preserved without estimation"
+assert_contains "$TEMP_ROOT/claude.usage.json" '"effort": "high"' \
+  "provider telemetry preserves the effective reasoning effort"
 
 # Final product acceptance is runtime-only, stack/platform neutral, and runs
 # rb-operational/v1 in a secret-free disposable copy even in manager validation mode.
@@ -1313,6 +1376,8 @@ assert_contains "$TEMP_ROOT/help.out" './rb-ralph.sh --install' "--help explains
 assert_contains "$TEMP_ROOT/help.out" 'rb-ralph --project /path/to/project --list' "--help provides inspection commands"
 assert_contains "$TEMP_ROOT/help.out" '--agent-provider claude --agent-model sonnet' "--help provides separate-role model command"
 assert_contains "$TEMP_ROOT/help.out" '--agent-model deepseek/deepseek-chat' "--help provides an OpenCode model example"
+assert_contains "$TEMP_ROOT/help.out" '--agent-effort <level>' "--help exposes executor reasoning effort"
+assert_contains "$TEMP_ROOT/help.out" '--manager-effort <lvl>' "--help exposes manager reasoning effort"
 assert_contains "$TEMP_ROOT/help.out" 'rb-ralph-watch --project /path/to/project' "--help explains the live dashboard command"
 assert_contains "$TEMP_ROOT/help.out" '--protected' "--help explains the protected opt-in"
 assert_contains "$TEMP_ROOT/help.out" 'defaults to YOLO' "--help warns about the unrestricted default"

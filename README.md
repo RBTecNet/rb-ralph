@@ -248,6 +248,7 @@ The optional custom-adapter record is a JSON object with this stable shape:
   "schema": "rb-ralph-usage/v1",
   "provider": "provider-name",
   "model": "exact-model-id",
+  "effort": "provider-effort-token-or-default",
   "role": "agent",
   "phaseId": "P01",
   "taskId": null,
@@ -618,6 +619,59 @@ compatible. Custom adapters receive the effective model for the current call in
 `RB_RALPH_MODEL`, plus both resolved role values in `RB_RALPH_AGENT_MODEL` and
 `RB_RALPH_MANAGER_MODEL`.
 
+### Reasoning effort by role
+
+Effort selection is also provider-neutral and follows the same precedence and
+inheritance rules as model selection:
+
+```bash
+# One effort for both independent calls
+rb-ralph --project . --provider codex --effort high
+
+# GPT-5.4 Mini implements with medium effort; Sol audits with xhigh effort
+rb-ralph --project /path/to/project --plan <artifact-id> --provider codex \
+  --agent-model gpt-5.4-mini --agent-effort medium \
+  --manager-model gpt-5.6-sol --manager-effort xhigh \
+  --execution-unit task --manager-audit exhaustive --dashboard
+
+# Claude uses its native --effort option underneath
+rb-ralph --project . --provider claude --model sonnet \
+  --agent-effort low --manager-effort high
+
+# OpenCode translates effort to the selected model's --variant
+rb-ralph --project . --provider opencode \
+  --model opencode-go/deepseek-v4-pro \
+  --agent-effort medium --manager-effort high
+
+# Mixed providers keep independent, provider-supported effort tokens
+rb-ralph --project . \
+  --agent-provider opencode --agent-model opencode/mimo-v2.5-free --agent-effort high \
+  --manager-provider codex --manager-model gpt-5.6-sol --manager-effort xhigh
+
+# Environment variables are equivalent to the CLI flags
+RB_RALPH_AGENT_EFFORT=medium RB_RALPH_MANAGER_EFFORT=xhigh \
+  rb-ralph --project . --provider codex \
+  --agent-model gpt-5.4-mini --manager-model gpt-5.6-sol
+```
+
+`--agent-effort` and `--manager-effort` override `--effort` regardless of
+argument order. If only `--agent-effort` is supplied and the manager uses the
+same inherited adapter, the manager inherits it. An explicitly different
+provider does not inherit the executor effort. Ralph intentionally accepts an
+opaque provider-supported token instead of imposing a false common enum.
+
+The environment equivalents are `RB_RALPH_EFFORT`,
+`RB_RALPH_AGENT_EFFORT`, and `RB_RALPH_MANAGER_EFFORT`. Existing
+provider-specific forms (`RB_RALPH_CODEX_*_EFFORT`,
+`RB_RALPH_CLAUDE_*_EFFORT`, and `RB_RALPH_OPENCODE_*_EFFORT`) are also
+supported. Custom adapters receive the current effective value in
+`RB_RALPH_EFFORT` and both resolved role values in the role-specific variables.
+
+Built-in adapters translate the selected token as follows: Codex receives
+`model_reasoning_effort`, Claude receives `--effort`, and OpenCode receives
+`--variant`. If the installed CLI or selected model rejects the token, the
+provider call fails visibly; Ralph never silently drops the requested effort.
+
 Use Codex for both roles from a source checkout:
 
 ```bash
@@ -719,6 +773,9 @@ and `read-only` for the manager. Configure models with
 `RB_RALPH_CODEX_MODEL`. When only the agent model is set and the manager is
 inherited, Ralph uses that model for both roles. Setting the manager model keeps
 an explicit override.
+Configure Codex effort with the provider-neutral flags above or with
+`RB_RALPH_CODEX_AGENT_EFFORT`, `RB_RALPH_CODEX_MANAGER_EFFORT`, or the shared
+`RB_RALPH_CODEX_EFFORT`.
 
 In protected mode, Claude uses `acceptEdits` for the implementation agent and
 `plan` for the manager. Configure models with
@@ -726,6 +783,8 @@ In protected mode, Claude uses `acceptEdits` for the implementation agent and
 `RB_RALPH_CLAUDE_MODEL`. Optional bounds are
 `RB_RALPH_CLAUDE_MAX_TURNS` and `RB_RALPH_CLAUDE_MAX_BUDGET_USD`.
 Claude model inheritance follows the same rule.
+Claude effort may likewise be configured with `RB_RALPH_CLAUDE_AGENT_EFFORT`,
+`RB_RALPH_CLAUDE_MANAGER_EFFORT`, or `RB_RALPH_CLAUDE_EFFORT`.
 
 `RB_RALPH_PERMISSION_MODE=protected` is the environment equivalent. Existing
 provider-specific variables such as `RB_RALPH_CODEX_AGENT_SANDBOX` and
