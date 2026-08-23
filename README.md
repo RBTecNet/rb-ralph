@@ -68,7 +68,7 @@ No auxiliary resource is written directly to `/bin`. The layout is:
     ├── bin/{rb-ralph,rb-ralph-watch}
     ├── adapters/{adapter-utils,codex,claude,opencode}.sh
     ├── core/rb-harness.cjs
-    ├── lib/{evidence,evidence-index,manager-audit,control-plane,process-supervisor,operational-verifier,provider-telemetry,usage-summary,dashboard}.cjs
+    ├── lib/{evidence,evidence-index,manager-audit,control-plane,process-supervisor,operational-verifier,fragment-discovery,provider-telemetry,usage-summary,dashboard}.cjs
     ├── VERSION
     ├── pricing.example.json
     └── README.md
@@ -124,12 +124,49 @@ Confirm the exact source or installed build at any time with:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.5.6
+# RB Ralph 0.6.2
 ```
 
 The installer prints and copies the same `VERSION` marker, so a source upgrade
 and the globally installed launcher can be compared without relying on file
 timestamps.
+
+### Alternate artifact and fragment directories
+
+Ralph looks under `.rb` by default. Use `--artifacts-dir <dir>` when another
+harness writes its planning artifacts elsewhere; `--fragments-dir` is an exact
+alias for users who call those inputs fragments:
+
+```bash
+rb-ralph --project /path/to/project --artifacts-dir .spec --list
+rb-ralph --project /path/to/project --fragments-dir .spec \
+  --plan spec-features-example-phases-imported-execution --dry-run
+```
+
+`RB_RALPH_ARTIFACTS_DIR` is the environment equivalent. Relative directories
+are resolved from `--project`, must remain inside that project, and are treated
+as read-only planning input. Ralph never renames the directory. Its own locks,
+logs, prompts, and durable execution evidence remain isolated under
+`.rb/runs/`, regardless of the selected input directory.
+
+When the selected directory contains `rb-manifest.json`, discovery remains
+fully manifest-driven and supports any producer of valid `rb-manifest/v1` and
+`rb-execution/v1` artifacts. Without a manifest, Ralph currently has a
+fail-closed compatibility importer for the public Beer and Code Harness
+contracts:
+
+- `.spec/init/project-phases.md`, using `- [ ] **Task:** ...`;
+- `.spec/features/<slug>/PHASES.md`, using `- [ ] TNN — ...`.
+
+The importer scans only the selected directory, recognizes exact numbered
+phase and task shapes, preserves the original file and its hash, and creates a
+temporary canonical `rb-execution/v1` view. The shared RB Harness parser then
+validates that view before any provider starts. Unsupported, malformed, or
+ambiguous documents fail with an actionable preflight error instead of being
+guessed. Imported tasks are sequential by default (`Parallel safe: false`) so
+Ralph cannot infer cross-agent write independence that the source harness did
+not declare. RB Memory integration still requires a manifest with a stable
+project identity.
 
 ## Live terminal dashboard
 
@@ -320,7 +357,9 @@ Codex caches or from the monorepo's internal layout participates in discovery.
 
 ## Current capabilities
 
-- Discovers ready plans through `rb-manifest/v1`; it never guesses paths.
+- Discovers ready plans through `rb-manifest/v1` in `.rb` or an explicitly
+  selected directory; manifest-less input is accepted only through a strict,
+  named compatibility importer.
 - Rejects stale hashes, invalid trees, unsupported contracts, and malformed
   phase/task documents before starting a provider.
 - Selects a plan by artifact ID or manifest path.
@@ -362,6 +401,11 @@ Codex caches or from the monorepo's internal layout participates in discovery.
   durable attempt number on resume, even when the interruption happened before
   an event row was recorded. Reusing a canonical prompt/log name can therefore
   never masquerade as executor control-plane tampering.
+- Records the owning Ralph PID in each run lock. On startup, a conflicting
+  invocation checks the owner, live dashboard, provider status files, and
+  run-specific processes. A lock with any live process remains exclusive; an
+  orphaned lock left by a power loss is quarantined atomically, removed, and
+  resumed automatically without deleting durable run evidence.
 - Supports progress-aware implementation retries, strategy recovery, a hard
   per-invocation cap, and resumable circuit-breaker pauses.
 - Persists a cumulative, evidence-bound finding ledger. Each exhaustive RETRY
@@ -888,6 +932,13 @@ status 2. Running the same command again resumes at the next durable attempt
 number and injects that persisted manager feedback into the executor prompt.
 Already accepted phases remain skipped. With `--dashboard`, the final paused
 frame stays visible until `Enter`.
+
+Run locks use the same fail-closed recovery policy. Ralph never clears a lock
+while its owner, dashboard, or a recorded provider process is alive. If all
+recorded processes are dead, as after a reboot or hard power loss, the stale
+directory is moved out of the lock name before a new lock is acquired. This
+atomic handoff prevents two simultaneous resumptions from both entering the
+same run.
 
 For example, a longer but still bounded overnight run can use:
 
