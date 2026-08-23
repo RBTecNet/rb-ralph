@@ -92,5 +92,5 @@ if [ -n "${RB_RALPH_TELEMETRY_FILE:-}" ]; then
   rb_run_provider_telemetry "$TELEMETRY_HELPER" codex "$MODEL" "$EFFORT" \
     "$RB_RALPH_TELEMETRY_FILE" "$CODEX_BIN" "${ARGS[@]}"
 else
-  rb_run_provider "$CODEX_BIN" "${ARGS[@]}"
+  rb_run_provider codex "$CODEX_BIN" "${ARGS[@]}"
 fi

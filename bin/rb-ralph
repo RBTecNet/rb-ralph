@@ -1402,8 +1402,8 @@ ensure_prompt_budget() {
 }
 
 provider_rate_limited() {
-  local path="$1" exit_code="$2"
-  [ "$exit_code" -eq 75 ] || grep -Fq 'RB_RALPH_PROVIDER_STATUS: RATE_LIMIT' "$path"
+  local exit_code="$2"
+  [ "$exit_code" -eq 75 ]
 }
 
 provider_wait_seconds() {
@@ -1414,6 +1414,19 @@ provider_wait_seconds() {
     requested="$MAX_RATE_LIMIT_WAIT"
   fi
   printf '%s\n' "$requested"
+}
+
+reset_task_call_outputs() {
+  [ "$EXECUTION_UNIT" = "task" ] || return 0
+  local current_task task_log task_usage task_submission
+  rm -f -- "$AGENT_LOG"
+  for current_task in "${PENDING_TASK_IDS[@]+"${PENDING_TASK_IDS[@]}"}"; do
+    task_log="$STATE_DIR/logs/$phase_id-$current_task-attempt-$attempt-agent.log"
+    task_usage="$USAGE_DIR/$phase_id-$current_task-attempt-$attempt-agent.usage.json"
+    task_submission="$STATE_DIR/evidence/$phase_id-$current_task-attempt-$attempt-agent-submission"
+    rm -f -- "$task_log" "$task_usage"
+    [ ! -d "$task_submission" ] || rm -rf -- "$task_submission"
+  done
 }
 
 while [ "$#" -gt 0 ]; do
@@ -2136,6 +2149,11 @@ while IFS= read -r tsv_row; do
     CONTROL_SNAPSHOT="$(mktemp "${TMPDIR:-/tmp}/rb-ralph-control-before.XXXXXX")"
     CONTROL_DIFF="$(mktemp "${TMPDIR:-/tmp}/rb-ralph-control-diff.XXXXXX")"
 
+    # A provider-availability retry or interrupted task call reuses the logical
+    # attempt number. Remove only the current task-call outputs before taking
+    # the immutable control-plane snapshot; invoke_agent republishes them
+    # atomically from its out-of-tree capture directory.
+    reset_task_call_outputs
     node "$EVIDENCE_HELPER" snapshot "$PROJECT" "$BEFORE_SNAPSHOT" \
       || die "$phase_id could not capture pre-agent project evidence"
     node "$CONTROL_PLANE_HELPER" snapshot "$STATE_DIR" "$CONTROL_SNAPSHOT" \

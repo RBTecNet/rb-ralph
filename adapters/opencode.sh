@@ -68,4 +68,4 @@ elif [ "$ROLE" = "manager" ]; then
 fi
 
 cd "$PROJECT_ROOT"
-rb_run_provider "$OPENCODE_BIN" "${ARGS[@]}"
+rb_run_provider opencode "$OPENCODE_BIN" "${ARGS[@]}"

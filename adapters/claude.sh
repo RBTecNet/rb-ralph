@@ -94,5 +94,5 @@ if [ -n "${RB_RALPH_TELEMETRY_FILE:-}" ]; then
   rb_run_provider_telemetry "$TELEMETRY_HELPER" claude "$MODEL" "$EFFORT" \
     "$RB_RALPH_TELEMETRY_FILE" "$CLAUDE_BIN" "${ARGS[@]}"
 else
-  rb_run_provider "$CLAUDE_BIN" "${ARGS[@]}"
+  rb_run_provider claude "$CLAUDE_BIN" "${ARGS[@]}"
 fi

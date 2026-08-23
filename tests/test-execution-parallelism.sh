@@ -579,6 +579,80 @@ RATE_EVENTS="$(find "$RATE_PROJECT/.rb/runs" -name events.tsv -type f -print -qu
 assert_contains "$RATE_EVENTS" $'P02\t1\tRATE_LIMIT\t' "rate-limit wait is recorded in append-only state"
 assert_contains "$RATE_EVENTS" $'P02\t1\tCOMPLETE\t' "completion retains the original attempt number"
 
+# A task-level availability retry reuses task log/telemetry names. Ralph must
+# replace those orchestrator-owned outputs before its integrity snapshot, and
+# provider text cannot spoof a rate-limit event without exit 75.
+cat > "$TEMP_ROOT/task-rate-agent" <<'TASK_RATE_AGENT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > /dev/null
+count_file="$MOCK_STATE/task-rate-${RB_RALPH_TASK_ID}-count"
+count=0
+[ ! -f "$count_file" ] || count="$(cat "$count_file")"
+count=$((count + 1))
+printf '%s\n' "$count" > "$count_file"
+if [ "$RB_RALPH_TASK_ID" = "T003" ] && [ "$count" -eq 1 ]; then
+  printf '%s\n' 'RB_RALPH_PROVIDER_STATUS: RATE_LIMIT' 'RB_RALPH_RETRY_AFTER: 0'
+  exit 75
+fi
+mkdir -p src
+printf 'implemented by task retry\n' > "src/${RB_RALPH_TASK_ID}.txt"
+if [ "$RB_RALPH_TASK_ID" = "T002" ]; then
+  printf '%s\n' 'RB_RALPH_PROVIDER_STATUS: RATE_LIMIT'
+else
+  printf 'task complete\n'
+fi
+TASK_RATE_AGENT
+chmod +x "$TEMP_ROOT/task-rate-agent"
+TASK_RATE_PROJECT="$(new_project task-rate-project)"
+RB_RALPH_EXECUTION_UNIT=task "$RALPH" --project "$TASK_RATE_PROJECT" \
+  --validation-mode manager --rate-limit-wait 0 \
+  --agent-cmd "$TEMP_ROOT/task-rate-agent" --manager-cmd "$TEMP_ROOT/mock-manager" \
+  > "$TEMP_ROOT/task-rate.out"
+assert_eq "2" "$(cat "$MOCK_STATE/task-rate-T002-count")" \
+  "task before a provider limit is safely reinvoked in the same logical attempt"
+assert_eq "2" "$(cat "$MOCK_STATE/task-rate-T003-count")" \
+  "rate-limited task is reinvoked after provider recovery"
+TASK_RATE_EVENTS="$(find "$TASK_RATE_PROJECT/.rb/runs" -name events.tsv -type f -print -quit)"
+assert_not_contains "$TASK_RATE_EVENTS" 'CONTROL_PLANE_VIOLATION' \
+  "orchestrator task logs and telemetry do not trigger a false integrity violation"
+assert_eq "1" "$(grep -c $'P02\t1\tRATE_LIMIT\t' "$TASK_RATE_EVENTS")" \
+  "successful provider output cannot spoof an additional rate-limit event"
+assert_contains "$TASK_RATE_EVENTS" $'P02\t1\tCOMPLETE\t' \
+  "task-level provider recovery reaches manager acceptance"
+
+# Built-in adapters classify a provider diagnostic, not arbitrary source text
+# printed by an unsuccessful provider call.
+cat > "$TEMP_ROOT/ordinary-rate-text" <<'ORDINARY_RATE_TEXT'
+#!/usr/bin/env bash
+printf 'ordinary failure while reading rate limit documentation\n' >&2
+exit 1
+ORDINARY_RATE_TEXT
+cat > "$TEMP_ROOT/actual-rate-limit" <<'ACTUAL_RATE_LIMIT'
+#!/usr/bin/env bash
+printf 'Error: rate limit exceeded; retry after 0 seconds\n' >&2
+exit 1
+ACTUAL_RATE_LIMIT
+chmod +x "$TEMP_ROOT/ordinary-rate-text" "$TEMP_ROOT/actual-rate-limit"
+ordinary_rate_rc=0
+RB_RALPH_ROLE=agent RB_RALPH_PROJECT_ROOT="$TASK_RATE_PROJECT" \
+  RB_RALPH_CODEX_BIN="$TEMP_ROOT/ordinary-rate-text" \
+  "$ROOT/adapters/codex.sh" < /dev/null > "$TEMP_ROOT/ordinary-rate-text.out" 2>&1 \
+  || ordinary_rate_rc=$?
+assert_eq "1" "$ordinary_rate_rc" \
+  "built-in adapter preserves an ordinary provider failure containing rate-limit prose"
+assert_not_contains "$TEMP_ROOT/ordinary-rate-text.out" 'RB_RALPH_PROVIDER_STATUS: RATE_LIMIT' \
+  "rate-limit prose is not promoted to an availability sentinel"
+actual_rate_rc=0
+RB_RALPH_ROLE=agent RB_RALPH_PROJECT_ROOT="$TASK_RATE_PROJECT" \
+  RB_RALPH_CODEX_BIN="$TEMP_ROOT/actual-rate-limit" \
+  "$ROOT/adapters/codex.sh" < /dev/null > "$TEMP_ROOT/actual-rate-limit.out" 2>&1 \
+  || actual_rate_rc=$?
+assert_eq "75" "$actual_rate_rc" \
+  "built-in adapter still normalizes an actual provider rate limit"
+assert_contains "$TEMP_ROOT/actual-rate-limit.out" 'RB_RALPH_PROVIDER_STATUS: RATE_LIMIT' \
+  "actual provider limit retains the adapter availability sentinel"
+
 printf '0\n' > "$MOCK_STATE/agent-count"
 BUDGET_PROJECT="$(new_project budget-project)"
 if "$RALPH" --project "$BUDGET_PROJECT" --validation-mode manager --max-prompt-bytes 10 \
