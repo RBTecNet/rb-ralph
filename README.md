@@ -124,7 +124,7 @@ Confirm the exact source or installed build at any time with:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.8.2
+# RB Ralph 0.8.3
 ```
 
 The installer prints and copies the same `VERSION` marker, so a source upgrade
