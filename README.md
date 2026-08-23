@@ -482,6 +482,12 @@ Codex caches or from the monorepo's internal layout participates in discovery.
   close individually, and a later regression creates a new auditable opening.
   Legacy ledgers are migrated and replayed from preserved manager audits when a
   run resumes, so an upgrade does not resend already-resolved work.
+- Fingerprints the manager's complete finding-key batch and treats an unchanged
+  root-cause batch as stalled even when the executor changed files or the
+  manager supplied a new reproduction. The manager still performs its complete
+  independent audit, but equivalent counterexamples must remain grouped under
+  one stable component/invariant finding so regex or vocabulary oscillation
+  cannot masquerade as progress.
 - Detects built-in-provider turns that exit successfully with no workspace
   delta and no completed final-response marker. Those incomplete turns receive
   bounded executor-only retries and never spend a manager review or logical
@@ -968,10 +974,12 @@ The default recovery budget is deliberately finite:
 - `--manager-first-output-timeout 180` independently bounds the manager's first
   byte while preserving executor evidence for a manager-only retry.
 
-Ralph treats a changed repository path plus a non-repeated manager reason as a
-progress signal. No changed path, or repeated feedback despite changes,
-increments the stall counter. This is intentionally a conservative operational
-heuristic rather than a claim that the change is correct; the manager and
+Ralph treats a changed repository path plus a changed canonical manager-finding
+batch as a progress signal. No changed path, or the same structured root cause
+despite changed prose and reproductions, increments the stall counter. Legacy
+manager responses without structured findings fall back to exact reason
+repetition. This is intentionally a conservative operational heuristic rather
+than a claim that the change is correct; the independent manager and
 deterministic gates retain correctness authority, while the absolute cap stops
 meaningless churn.
 
@@ -1173,7 +1181,8 @@ conflict handling, and rejection of same-path sibling patches.
   allowances, or currency conversion; provider-reported cost remains preferred.
 - Provider limits are resumable within one running process; durable restart at
   a future wall-clock time is not yet a scheduler service.
-- Progress detection is based on changed paths and manager-reason repetition;
+- Progress detection is based on changed paths and the manager's canonical
+  structured root-cause batch, with exact-reason fallback for legacy responses;
   it does not semantically compare implementations. The hard cap remains the
   final guard against different-looking changes that do not converge.
 - RB Memory integration is optional; automated semantic consolidation and

@@ -887,6 +887,19 @@ record_context_compaction_signal() {
   fi
 }
 
+manager_finding_batch_fingerprint() {
+  local report="$1"
+  [ -f "$report" ] || return 0
+  node -e '
+    const fs = require("node:fs");
+    const crypto = require("node:crypto");
+    let value;
+    try { value = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch { process.exit(0); }
+    const keys = (value.findings ?? []).map((finding) => String(finding.key ?? "")).filter(Boolean).sort();
+    if (keys.length) process.stdout.write(crypto.createHash("sha256").update(JSON.stringify(keys)).digest("hex"));
+  ' "$report"
+}
+
 write_agent_prompt() {
   local output="$1" content="$2" task_id="$3" execution_root="$4"
   {
@@ -909,6 +922,8 @@ write_agent_prompt() {
       "Treat $ARTIFACTS_RELATIVE as read-only planning input; never edit generated specifications or fragments during implementation." \
       'Never create or modify .rb/runs; it is orchestrator-owned control-plane state. Put optional evidence files only in RB_RALPH_AGENT_EVIDENCE_DIR.' \
       'Return a concise summary of changes, validations, failures, and remaining risks.' \
+      'Repair the invariant behind manager feedback, not only its quoted reproduction. Add positive and negative equivalence coverage when one semantic rule produced several examples.' \
+      'If a requested deterministic mechanism would need to interpret unbounded natural language without a typed field, exact grammar, finite matrix, or declared classifier contract, do not grow a keyword denylist. State the missing authority precisely so the independent manager can classify the plan as unsafe ambiguity.' \
       'End a genuinely completed final response with the exact line RB_RALPH_EXECUTOR_STATUS: COMPLETE. Do not emit it after an interrupted tool call or partial turn.'
     if [ -n "$LAST_FEEDBACK" ]; then
       printf '\nPREVIOUS_MANAGER_FEEDBACK: %s\n' "$LAST_FEEDBACK"
@@ -2704,6 +2719,10 @@ while IFS= read -r tsv_row; do
   stalled_attempts=0
   strategy_resets=0
   same_feedback_count=0
+  last_finding_batch=""
+  if [ "$previous_attempt" -gt 0 ] && [ -f "$STATE_DIR/logs/$phase_id-attempt-$previous_attempt-manager-audit.json" ]; then
+    last_finding_batch="$(manager_finding_batch_fingerprint "$STATE_DIR/logs/$phase_id-attempt-$previous_attempt-manager-audit.json")"
+  fi
   phase_run_attempts=0
   rate_limit_waits=0
   incomplete_retries=0
@@ -3088,6 +3107,9 @@ while IFS= read -r tsv_row; do
         '' \
         'Use COMPLETE only when every task and criterion is evidenced.' \
         'For RETRY, emit one RB_RALPH_FINDING row for every FAIL or UNPROVEN criterion and include all defects observable from the current evidence, including independent defects in unrelated criteria.' \
+        'Group equivalent reproductions under one root-cause finding. Do not create a new finding merely because a different input phrase exposes the same violated invariant.' \
+        'Keep the finding boundary and expected state stable while that invariant remains unresolved: boundary names the canonical component or public interface, expected names the invariant, observed may list all current counterexamples, and evidence names their provenance.' \
+        'When a deterministic mechanism is expected to classify natural language, audit the complete finite authority and its positive/negative equivalence classes in this batch. If no finite authority or explicit classifier contract exists, report one unsafe-ambiguity finding and use BLOCKED instead of feeding the executor an endless vocabulary expansion.' \
         'The structured finding rows are the complete current snapshot. Repeat an unresolved finding in every RETRY batch. Omitting a prior finding claims it is resolved by the current changed evidence; Ralph keeps it open when the canonical evidence fingerprint did not change.' \
         'Findings are cumulative across retries. COMPLETE means every open finding below is resolved by current code or canonical evidence; a new reason never erases an older one.' \
         'Use RETRY when another implementation attempt can reasonably fix the result. Implementation defects, test failures, incomplete criteria, and incorrect technical approaches are RETRY, never BLOCKED.' \
@@ -3287,8 +3309,11 @@ while IFS= read -r tsv_row; do
         ;;
       RETRY)
         previous_feedback="$LAST_FEEDBACK"
+        current_finding_batch="$(manager_finding_batch_fingerprint "$MANAGER_AUDIT_REPORT")"
         change_count="$(evidence_change_count "$CHANGED_PATHS_FILE")"
-        if [ -n "$previous_feedback" ] && [ "$reason" = "$previous_feedback" ]; then
+        if [ -n "$current_finding_batch" ] && [ "$current_finding_batch" = "$last_finding_batch" ]; then
+          same_feedback_count=$((same_feedback_count + 1))
+        elif [ -z "$current_finding_batch" ] && [ -n "$previous_feedback" ] && [ "$reason" = "$previous_feedback" ]; then
           same_feedback_count=$((same_feedback_count + 1))
         else
           same_feedback_count=0
@@ -3319,6 +3344,7 @@ while IFS= read -r tsv_row; do
         LAST_VALIDATION_LOG="${VALIDATION_LOG#"$PROJECT/"}"
         LAST_CHANGED_PATHS="${CHANGED_PATHS_FILE#"$PROJECT/"}"
         LAST_ATTEMPT_FAILURE="$reason"
+        last_finding_batch="$current_finding_batch"
         previous_attempt="$attempt"
 
         if [ "$stalled_attempts" -ge "$MAX_ATTEMPTS" ]; then

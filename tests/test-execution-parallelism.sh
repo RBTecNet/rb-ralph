@@ -372,6 +372,51 @@ node "$ROOT/lib/manager-audit.cjs" replay "$EXHAUSTIVE_FINDINGS" \
 assert_eq "$EXHAUSTIVE_REPLAY_SHA" "$(node -e 'const f=require("node:fs"),c=require("node:crypto");process.stdout.write(c.createHash("sha256").update(f.readFileSync(process.argv[1])).digest("hex"))' "$EXHAUSTIVE_FINDINGS")" \
   "replaying canonical manager audits is idempotent across repeated resumes"
 
+# Changed files and differently worded reasons are not progress when the
+# exhaustive manager keeps the same canonical component/invariant finding.
+cat > "$TEMP_ROOT/root-cause-agent" <<'ROOT_CAUSE_AGENT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > /dev/null
+count=0
+[ ! -f "$MOCK_STATE/root-cause-agent.count" ] || count="$(cat "$MOCK_STATE/root-cause-agent.count")"
+count=$((count + 1))
+printf '%s\n' "$count" > "$MOCK_STATE/root-cause-agent.count"
+mkdir -p src
+printf 'lexical patch %s\n' "$count" > src/scope-classifier.txt
+printf '%s\n' 'RB_RALPH_EXECUTOR_STATUS: COMPLETE'
+ROOT_CAUSE_AGENT
+cat > "$TEMP_ROOT/root-cause-manager" <<'ROOT_CAUSE_MANAGER'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > /dev/null
+printf '%s\n' \
+  'RB_RALPH_AUDIT_STATUS: COMPLETE' \
+  'RB_RALPH_CRITERION: T001 | PASS | executor changed the classifier' \
+  'RB_RALPH_CRITERION: AC-T001-01 | FAIL | scope classifier still lacks a finite authority' \
+  "RB_RALPH_FINDING: AC-T001-01 | request scope classifier | typed authority accepts valid classes and rejects invalid classes | attempt ${RB_RALPH_ATTEMPT:?} exposes another paraphrase failure | current classifier and focused reproduction" \
+  'RB_RALPH_DECISION: RETRY' \
+  "RB_RALPH_REASON: paraphrase ${RB_RALPH_ATTEMPT:?} still fails"
+ROOT_CAUSE_MANAGER
+chmod +x "$TEMP_ROOT/root-cause-agent" "$TEMP_ROOT/root-cause-manager"
+ROOT_CAUSE_PROJECT="$TEMP_ROOT/root-cause-project"
+mkdir -p "$ROOT_CAUSE_PROJECT/.rb/features/example"
+node "$CLI" project init "$ROOT_CAUSE_PROJECT" --name root-cause --id root-cause >/dev/null
+cp "$MINIMAL_FIXTURE" "$ROOT_CAUSE_PROJECT/.rb/features/example/PHASES.md"
+node "$CLI" manifest sync "$ROOT_CAUSE_PROJECT" >/dev/null
+if RB_RALPH_EXECUTION_UNIT=task RB_RALPH_MANAGER_AUDIT_MODE=exhaustive \
+  "$RALPH" --project "$ROOT_CAUSE_PROJECT" --validation-mode manager \
+  --max-attempts 1 --max-strategy-resets 0 --max-total-attempts 5 \
+  --agent-cmd "$TEMP_ROOT/root-cause-agent" --manager-cmd "$TEMP_ROOT/root-cause-manager" \
+  > "$TEMP_ROOT/root-cause.out" 2>&1; then
+  fail "root-cause oscillation unexpectedly completed"
+fi
+assert_eq "2" "$(cat "$MOCK_STATE/root-cause-agent.count")" \
+  "same canonical root cause pauses after one repair even when files and reason prose change"
+ROOT_CAUSE_EVENTS="$(find "$ROOT_CAUSE_PROJECT/.rb/runs" -name events.tsv -type f -print -quit)"
+assert_contains "$ROOT_CAUSE_EVENTS" $'\tPAUSED\tcircuit breaker: sem progresso comprovável' \
+  "root-cause oscillation reaches the resumable circuit breaker"
+
 # An exhaustive manager can report COMPLETE while an orchestrator-owned gate
 # forces RETRY. That override must become a fallback finding, not be passed to
 # the structured RETRY reconciler as though the manager emitted findings.
