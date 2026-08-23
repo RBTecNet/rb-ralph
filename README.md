@@ -68,7 +68,7 @@ No auxiliary resource is written directly to `/bin`. The layout is:
     ├── bin/{rb-ralph,rb-ralph-watch}
     ├── adapters/{adapter-utils,codex,claude,opencode}.sh
     ├── core/rb-harness.cjs
-    ├── lib/{evidence,evidence-index,manager-audit,control-plane,process-supervisor,operational-verifier,fragment-discovery,provider-telemetry,usage-summary,dashboard}.cjs
+    ├── lib/{evidence,evidence-index,manager-audit,control-plane,process-supervisor,operational-verifier,fragment-discovery,profiles,provider-telemetry,usage-summary,dashboard}.cjs
     ├── VERSION
     ├── pricing.example.json
     └── README.md
@@ -124,12 +124,80 @@ Confirm the exact source or installed build at any time with:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.6.2
+# RB Ralph 0.7.0
 ```
 
 The installer prints and copies the same `VERSION` marker, so a source upgrade
 and the globally installed launcher can be compared without relying on file
 timestamps.
+
+### Interactive wizard and reusable profiles
+
+Run `rb-ralph` without arguments in an interactive terminal to open the
+execution wizard. `rb-ralph --wizard` is the explicit equivalent. The wizard:
+
+1. selects the project and artifact/fragment directory;
+2. discovers only ready, valid `rb-execution/v1` plans;
+3. selects a built-in or saved execution profile;
+4. asks for executor and manager provider, model, and effort when absent;
+5. optionally configures audit, isolation, parallelism, permission, dashboard,
+   and first-output timeouts;
+6. prints the exact escaped command before executing it.
+
+It can print or cancel without starting a provider, restart the interview, or
+save the reusable portion as a named profile before execution. The command is
+built as a Bash argument array and executed directly: user answers and profile
+values are never passed through `eval`.
+
+The immutable built-in profiles are:
+
+| Profile | Execution policy |
+| --- | --- |
+| `balanced` | fresh call per task, exhaustive manager, final audit, dashboard, YOLO |
+| `fast` | fresh call per phase, exhaustive manager, final audit, dashboard, YOLO |
+| `strict` | fresh call per task, exhaustive manager, final audit, dashboard, protected |
+
+Built-ins deliberately omit provider and model choices. The wizard asks for
+them; a custom profile can retain them. Profiles never retain project paths,
+plan IDs, Memory URLs or token variable values, operational-contract paths,
+pricing files, credentials, or secrets.
+
+Saved profiles use the versioned `rb-ralph-profiles/v1` JSON contract at
+`${XDG_CONFIG_HOME:-$HOME/.config}/rb-ralph/profiles.json`. Ralph creates the
+directory with mode `0700`, writes atomically, and keeps the file at mode
+`0600`. It rejects symlinks, unknown fields, malformed values, built-in name
+shadowing, and unsupported CLI options. Set `RB_RALPH_PROFILES_FILE` to choose
+another file, for example in isolated CI tests.
+
+Manage and inspect profiles without starting a provider:
+
+```bash
+rb-ralph profile list
+rb-ralph profile show my-team
+rb-ralph profile path
+rb-ralph profile delete my-team
+```
+
+Use a profile in a normal non-interactive command:
+
+```bash
+rb-ralph --profile my-team \
+  --project /path/to/project \
+  --artifacts-dir .spec \
+  --plan <artifact-id>
+
+# Explicit command-line choices override the stored strategy.
+rb-ralph --profile my-team --project . --plan <artifact-id> \
+  --agent-model gpt-5.4-mini --manager-model gpt-5.6-sol \
+  --manager-effort xhigh --no-dashboard
+```
+
+Precedence is runtime defaults and environment, then profile values, then
+explicit command-line flags. In particular, an explicit shared `--provider`,
+`--model`, or `--effort` replaces both role-specific values from a profile.
+Invoking `rb-ralph` without arguments while stdin or stdout is redirected does
+not wait for input: it prints help and exits with an actionable error. Use a
+complete command in scripts and CI.
 
 ### Alternate artifact and fragment directories
 

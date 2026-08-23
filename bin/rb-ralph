@@ -31,6 +31,7 @@ OPERATIONAL_VERIFIER="$RB_RALPH_HOME/lib/operational-verifier.cjs"
 CONTROL_PLANE_HELPER="$RB_RALPH_HOME/lib/control-plane.cjs"
 SPLASH_HELPER="$RB_RALPH_HOME/lib/splash.cjs"
 FRAGMENT_DISCOVERY_HELPER="$RB_RALPH_HOME/lib/fragment-discovery.cjs"
+PROFILE_HELPER="$RB_RALPH_HOME/lib/profiles.cjs"
 DASHBOARD_CLI="$RB_RALPH_HOME/bin/rb-ralph-watch"
 CORE_CLI_OPTION=""
 CORE_CLI_ENV="${RB_RALPH_CORE_CLI:-}"
@@ -173,8 +174,16 @@ usage() {
   cat <<'USAGE'
 Usage:
   rb-ralph [options]
+  rb-ralph --wizard
+  rb-ralph profile list|show <name>|delete <name>|path
 
 Quick start:
+  # Start the interactive command builder
+  rb-ralph
+
+  # Reuse a saved execution strategy; explicit flags override the profile
+  rb-ralph --profile my-team --project /path/to/project --plan <artifact-id>
+
   # Install for the current user, then ensure ~/.local/bin is on PATH
   ./rb-ralph.sh --install --prefix "$HOME/.local"
 
@@ -212,6 +221,8 @@ RB Ralph defaults to YOLO: provider permission checks and sandboxes are bypassed
 Use --protected explicitly when the project or machine is not fully trusted.
 
 Options:
+  --wizard              Start the interactive command builder
+  --profile <name>       Load a built-in or user execution profile
   --project <path>       Project root (default: current directory)
   --plan <id-or-path>    Execution-plan artifact ID or manifest path
   --artifacts-dir <dir>  Artifact/fragment root (default: .rb; alias: --fragments-dir)
@@ -261,6 +272,7 @@ Options:
   --splash               Play the launch splash animation and exit
   --no-splash            Skip the launch splash for this invocation
   --dashboard, --tui     Show the live terminal dashboard during execution
+  --no-dashboard         Disable a dashboard enabled by a profile
   --watch                Watch the latest run; equivalent to rb-ralph-watch
   --dry-run              Validate and show the selected phase schedule
   --list                 List ready execution plans and exit
@@ -269,6 +281,7 @@ Options:
 
 Environment equivalents:
   RB_RALPH_HOME, RB_RALPH_CORE_CLI, RB_RALPH_ARTIFACTS_DIR,
+  RB_RALPH_PROFILES_FILE,
   RB_RALPH_AGENT_CMD, RB_RALPH_MANAGER_CMD,
   RB_RALPH_AGENT_PROVIDER, RB_RALPH_MANAGER_PROVIDER,
   RB_RALPH_MODEL, RB_RALPH_AGENT_MODEL, RB_RALPH_MANAGER_MODEL,
@@ -1586,6 +1599,383 @@ physical_artifact_path() {
   esac
 }
 
+require_profile_helper() {
+  [ -f "$PROFILE_HELPER" ] || die "RB Ralph profile helper not found: $PROFILE_HELPER; reinstall the complete package"
+  command -v node >/dev/null 2>&1 || die "Node.js is required for RB Ralph profiles and the interactive wizard"
+}
+
+run_profile_command() {
+  require_profile_helper
+  local operation="${2:-list}"
+  case "$operation" in
+    list)
+      { [ "$#" -eq 1 ] || [ "$#" -eq 2 ]; } || die "Usage: rb-ralph profile list"
+      node "$PROFILE_HELPER" list
+      ;;
+    show|delete)
+      [ "$#" -eq 3 ] || die "Usage: rb-ralph profile $operation <name>"
+      node "$PROFILE_HELPER" "$operation" "$3"
+      ;;
+    path)
+      [ "$#" -eq 2 ] || die "Usage: rb-ralph profile path"
+      node "$PROFILE_HELPER" path
+      ;;
+    *) die "Unknown profile command: $operation (use list, show, delete, or path)" ;;
+  esac
+}
+
+PROFILE_LOADED_ARGS=()
+load_profile_arguments() {
+  local name="$1" output argument
+  require_profile_helper
+  if ! output="$(node "$PROFILE_HELPER" args "$name")"; then
+    die "Could not load RB Ralph profile '$name'"
+  fi
+  PROFILE_LOADED_ARGS=()
+  while IFS= read -r argument; do
+    [ -z "$argument" ] || PROFILE_LOADED_ARGS+=("$argument")
+  done <<< "$output"
+}
+
+argument_list_has() {
+  local wanted="$1" current
+  shift
+  for current in "$@"; do
+    [ "$current" != "$wanted" ] || return 0
+  done
+  return 1
+}
+
+expand_profile_arguments() {
+  local profile_name="" current profile_flag value index skip_value
+  local original_args=("$@") remaining_args=() merged_args=()
+  index=0
+  while [ "$index" -lt "${#original_args[@]}" ]; do
+    current="${original_args[$index]}"
+    if [ "$current" = "--profile" ]; then
+      [ $((index + 1)) -lt "${#original_args[@]}" ] || die "--profile requires a name"
+      [ -z "$profile_name" ] || die "--profile may only be provided once"
+      profile_name="${original_args[$((index + 1))]}"
+      index=$((index + 2))
+      continue
+    fi
+    remaining_args+=("$current")
+    index=$((index + 1))
+  done
+  [ -n "$profile_name" ] || { set -- "${remaining_args[@]}"; EXPANDED_ARGS=("$@"); return 0; }
+
+  load_profile_arguments "$profile_name"
+  index=0
+  while [ "$index" -lt "${#PROFILE_LOADED_ARGS[@]}" ]; do
+    profile_flag="${PROFILE_LOADED_ARGS[$index]}"
+    value=""
+    skip_value=0
+    case "$profile_flag" in
+      --final-audit|--no-final-audit|--dashboard|--no-dashboard|--yolo|--protected) ;;
+      *)
+        [ $((index + 1)) -lt "${#PROFILE_LOADED_ARGS[@]}" ] || die "Profile '$profile_name' emitted an incomplete option: $profile_flag"
+        value="${PROFILE_LOADED_ARGS[$((index + 1))]}"
+        skip_value=1
+        ;;
+    esac
+
+    case "$profile_flag" in
+      --agent-provider|--agent-cmd)
+        if argument_list_has --provider "${remaining_args[@]}" ||
+           argument_list_has --agent-provider "${remaining_args[@]}" ||
+           argument_list_has --agent-cmd "${remaining_args[@]}"; then
+          index=$((index + skip_value + 1)); continue
+        fi
+        ;;
+      --manager-provider|--manager-cmd)
+        if argument_list_has --provider "${remaining_args[@]}" ||
+           argument_list_has --manager-provider "${remaining_args[@]}" ||
+           argument_list_has --manager-cmd "${remaining_args[@]}"; then
+          index=$((index + skip_value + 1)); continue
+        fi
+        ;;
+      --agent-model)
+        if argument_list_has --model "${remaining_args[@]}" || argument_list_has --agent-model "${remaining_args[@]}"; then
+          index=$((index + skip_value + 1)); continue
+        fi
+        ;;
+      --manager-model)
+        if argument_list_has --model "${remaining_args[@]}" || argument_list_has --manager-model "${remaining_args[@]}"; then
+          index=$((index + skip_value + 1)); continue
+        fi
+        ;;
+      --agent-effort)
+        if argument_list_has --effort "${remaining_args[@]}" || argument_list_has --agent-effort "${remaining_args[@]}"; then
+          index=$((index + skip_value + 1)); continue
+        fi
+        ;;
+      --manager-effort)
+        if argument_list_has --effort "${remaining_args[@]}" || argument_list_has --manager-effort "${remaining_args[@]}"; then
+          index=$((index + skip_value + 1)); continue
+        fi
+        ;;
+    esac
+    merged_args+=("$profile_flag")
+    [ "$skip_value" -eq 0 ] || merged_args+=("$value")
+    index=$((index + skip_value + 1))
+  done
+  EXPANDED_ARGS=("${merged_args[@]}" "${remaining_args[@]}")
+}
+
+WIZARD_REPLY=""
+WIZARD_PROFILE_ARGS=()
+WIZARD_RUN_ARGS=()
+
+wizard_read() {
+  local prompt="$1" default_value="${2:-}" entered
+  if [ -n "$default_value" ]; then
+    printf '%s [%s]: ' "$prompt" "$default_value" >&2
+  else
+    printf '%s: ' "$prompt" >&2
+  fi
+  if ! IFS= read -r entered; then
+    printf '\nWizard cancelled: input stream ended.\n' >&2
+    exit 130
+  fi
+  [ -n "$entered" ] || entered="$default_value"
+  WIZARD_REPLY="$entered"
+}
+
+wizard_choice() {
+  local prompt="$1" default_value="$2" allowed="$3" candidate item valid
+  while true; do
+    wizard_read "$prompt" "$default_value"
+    candidate="$WIZARD_REPLY"
+    valid=0
+    for item in $allowed; do
+      [ "$candidate" != "$item" ] || valid=1
+    done
+    if [ "$valid" -eq 1 ]; then WIZARD_REPLY="$candidate"; return 0; fi
+    printf 'Escolha uma destas opções: %s\n' "$allowed" >&2
+  done
+}
+
+wizard_args_have() {
+  argument_list_has "$1" "${WIZARD_PROFILE_ARGS[@]+"${WIZARD_PROFILE_ARGS[@]}"}"
+}
+
+wizard_append_value() {
+  WIZARD_PROFILE_ARGS+=("$1" "$2")
+}
+
+wizard_append_role() {
+  local role="$1" label provider command model effort
+  if [ "$role" = "agent" ]; then label="executor"; else label="gerente"; fi
+  wizard_choice "Provider do $label (codex/claude/opencode/custom)" "codex" "codex claude opencode custom"
+  provider="$WIZARD_REPLY"
+  if [ "$provider" = "custom" ]; then
+    wizard_read "Comando do adapter do $label" ""
+    command="$WIZARD_REPLY"
+    [ -n "$command" ] || { printf 'O comando do adapter não pode ficar vazio.\n' >&2; return 1; }
+    wizard_append_value "--${role}-cmd" "$command"
+  else
+    wizard_append_value "--${role}-provider" "$provider"
+  fi
+  wizard_read "Modelo do $label (vazio usa o padrão do provider)" ""
+  model="$WIZARD_REPLY"
+  [ -z "$model" ] || wizard_append_value "--${role}-model" "$model"
+  wizard_read "Effort do $label (vazio usa o padrão do provider)" ""
+  effort="$WIZARD_REPLY"
+  [ -z "$effort" ] || wizard_append_value "--${role}-effort" "$effort"
+}
+
+wizard_print_command() {
+  local argument
+  printf '\nComando montado:\n  '
+  printf '%q' "$SCRIPT_PATH"
+  for argument in "${WIZARD_RUN_ARGS[@]}"; do printf ' %q' "$argument"; done
+  printf '\n\n'
+}
+
+wizard_save_profile() {
+  local name="$1" argument
+  {
+    for argument in "${WIZARD_PROFILE_ARGS[@]}"; do printf '%s\n' "$argument"; done
+  } | node "$PROFILE_HELPER" save-args "$name"
+}
+
+wizard_once() {
+  local project artifacts default_artifacts list_file row id path hash index selection
+  local selected_plan profile_name origin description advanced answer parallel isolation action
+  local plan_ids=() plan_paths=() profile_names=()
+
+  printf '\nRB Ralph · execução assistida\n'
+  printf 'O wizard apenas monta opções validadas; credenciais nunca são gravadas em perfis.\n\n'
+  wizard_read "Pasta do projeto" "$INVOCATION_DIR"
+  project="$WIZARD_REPLY"
+  case "$project" in
+    "~") project="$HOME" ;;
+    "~/"*) project="$HOME/${project#~/}" ;;
+  esac
+  [ -d "$project" ] || { printf 'A pasta do projeto não existe: %s\n' "$project" >&2; return 10; }
+  project="$(cd "$project" && pwd -P)"
+
+  default_artifacts=".rb"
+  [ ! -d "$project/.rb" ] || default_artifacts=".rb"
+  if [ ! -d "$project/.rb" ] && [ -d "$project/.spec" ]; then default_artifacts=".spec"; fi
+  wizard_read "Pasta dos artefatos/fragmentos (relativa ao projeto)" "$default_artifacts"
+  artifacts="$WIZARD_REPLY"
+  [ -d "$project/$artifacts" ] || { printf 'A pasta de artefatos não existe dentro do projeto: %s\n' "$artifacts" >&2; return 10; }
+
+  list_file="$(mktemp "${TMPDIR:-/tmp}/rb-ralph-wizard.XXXXXX")"
+  if ! "$SCRIPT_PATH" --project "$project" --artifacts-dir "$artifacts" --list --no-splash > "$list_file"; then
+    rm -f -- "$list_file"
+    printf 'Não foi possível descobrir planos prontos. Ajuste o projeto ou a pasta de artefatos.\n' >&2
+    return 10
+  fi
+  while IFS= read -r row; do
+    IFS="$TSV_SEPARATOR" read -r id path hash <<< "${row//$'\t'/$TSV_SEPARATOR}"
+    [ "$id" != "artifact_id" ] || continue
+    [ -n "$id" ] || continue
+    plan_ids+=("$id")
+    plan_paths+=("$path")
+  done < "$list_file"
+  rm -f -- "$list_file"
+  [ "${#plan_ids[@]}" -gt 0 ] || { printf 'Nenhum plano rb-execution/v1 pronto foi encontrado.\n' >&2; return 10; }
+  if [ "${#plan_ids[@]}" -eq 1 ]; then
+    selected_plan="${plan_ids[0]}"
+    printf 'Plano encontrado: %s (%s)\n' "$selected_plan" "${plan_paths[0]}"
+  else
+    printf '\nPlanos prontos:\n'
+    index=0
+    while [ "$index" -lt "${#plan_ids[@]}" ]; do
+      printf '  %s) %s  [%s]\n' "$((index + 1))" "${plan_ids[$index]}" "${plan_paths[$index]}"
+      index=$((index + 1))
+    done
+    while true; do
+      wizard_read "Número do plano" "1"
+      selection="$WIZARD_REPLY"
+      if [[ "$selection" =~ ^[1-9][0-9]*$ ]] && [ "$selection" -le "${#plan_ids[@]}" ]; then break; fi
+      printf 'Selecione um número entre 1 e %s.\n' "${#plan_ids[@]}" >&2
+    done
+    selected_plan="${plan_ids[$((selection - 1))]}"
+  fi
+
+  printf '\nPerfis disponíveis:\n'
+  index=0
+  while IFS="$TSV_SEPARATOR" read -r profile_name origin description; do
+    [ "$profile_name" != "name" ] || continue
+    [ -n "$profile_name" ] || continue
+    profile_names+=("$profile_name")
+    printf '  - %-12s %-8s %s\n' "$profile_name" "$origin" "$description"
+  done <<< "$(node "$PROFILE_HELPER" list | tr '\t' "$TSV_SEPARATOR")"
+  printf '  - manual       configure tudo agora\n'
+  while true; do
+    wizard_read "Perfil" "balanced"
+    profile_name="$WIZARD_REPLY"
+    [ "$profile_name" = "manual" ] && break
+    if argument_list_has "$profile_name" "${profile_names[@]}"; then break; fi
+    printf 'Perfil desconhecido: %s\n' "$profile_name" >&2
+  done
+  WIZARD_PROFILE_ARGS=()
+  if [ "$profile_name" != "manual" ]; then
+    load_profile_arguments "$profile_name"
+    WIZARD_PROFILE_ARGS=("${PROFILE_LOADED_ARGS[@]}")
+  fi
+
+  if ! wizard_args_have --agent-provider && ! wizard_args_have --agent-cmd; then
+    wizard_append_role agent || return 10
+  fi
+  if ! wizard_args_have --manager-provider && ! wizard_args_have --manager-cmd; then
+    wizard_choice "Gerente usa o mesmo provider/comando do executor? (s/n)" "s" "s n"
+    if [ "$WIZARD_REPLY" = "n" ]; then wizard_append_role manager || return 10; fi
+  fi
+
+  wizard_choice "Personalizar controles avançados? (s/n)" "n" "s n"
+  advanced="$WIZARD_REPLY"
+  if [ "$advanced" = "s" ]; then
+    wizard_choice "Unidade de execução (task/phase)" "task" "task phase"
+    wizard_append_value --execution-unit "$WIZARD_REPLY"
+    wizard_choice "Auditoria do gerente (exhaustive/legacy)" "exhaustive" "exhaustive legacy"
+    wizard_append_value --manager-audit "$WIZARD_REPLY"
+    wizard_choice "Auditoria final? (s/n)" "s" "s n"
+    if [ "$WIZARD_REPLY" = "s" ]; then WIZARD_PROFILE_ARGS+=(--final-audit); else WIZARD_PROFILE_ARGS+=(--no-final-audit); fi
+    wizard_choice "Dashboard? (s/n)" "s" "s n"
+    if [ "$WIZARD_REPLY" = "s" ]; then WIZARD_PROFILE_ARGS+=(--dashboard); else WIZARD_PROFILE_ARGS+=(--no-dashboard); fi
+    wizard_choice "Permissões (yolo/protected)" "yolo" "yolo protected"
+    if [ "$WIZARD_REPLY" = "yolo" ]; then WIZARD_PROFILE_ARGS+=(--yolo); else WIZARD_PROFILE_ARGS+=(--protected); fi
+    while true; do
+      wizard_read "Quantidade máxima de agentes paralelos" "1"
+      parallel="$WIZARD_REPLY"
+      [[ "$parallel" =~ ^[1-9][0-9]*$ ]] && break
+      printf 'Informe um inteiro positivo.\n' >&2
+    done
+    wizard_append_value --parallel "$parallel"
+    if [ "$parallel" -gt 1 ]; then isolation="worktree"; else isolation="shared"; fi
+    wizard_choice "Isolamento (shared/worktree)" "$isolation" "shared worktree"
+    isolation="$WIZARD_REPLY"
+    if [ "$parallel" -gt 1 ] && [ "$isolation" != "worktree" ]; then
+      printf 'Execução paralela exige isolamento worktree; ajustado automaticamente.\n' >&2
+      isolation="worktree"
+    fi
+    wizard_append_value --isolation "$isolation"
+    wizard_read "Timeout da primeira saída do executor em segundos (0 desativa)" "300"
+    [[ "$WIZARD_REPLY" =~ ^[0-9]+$ ]] || { printf 'Timeout inválido.\n' >&2; return 10; }
+    wizard_append_value --agent-first-output-timeout "$WIZARD_REPLY"
+    wizard_read "Timeout da primeira saída do gerente em segundos (0 desativa)" "180"
+    [[ "$WIZARD_REPLY" =~ ^[0-9]+$ ]] || { printf 'Timeout inválido.\n' >&2; return 10; }
+    wizard_append_value --manager-first-output-timeout "$WIZARD_REPLY"
+  fi
+
+  WIZARD_RUN_ARGS=(--project "$project" --artifacts-dir "$artifacts" --plan "$selected_plan")
+  WIZARD_RUN_ARGS+=("${WIZARD_PROFILE_ARGS[@]}")
+  wizard_print_command
+  wizard_choice "Ação: executar/salvar/mostrar/reiniciar/cancelar" "executar" "executar salvar mostrar reiniciar cancelar"
+  action="$WIZARD_REPLY"
+  case "$action" in
+    executar)
+      exec "$SCRIPT_PATH" "${WIZARD_RUN_ARGS[@]}"
+      ;;
+    salvar)
+      wizard_read "Nome do perfil ([a-z0-9-])" "meu-perfil"
+      wizard_save_profile "$WIZARD_REPLY"
+      exec "$SCRIPT_PATH" "${WIZARD_RUN_ARGS[@]}"
+      ;;
+    mostrar) return 0 ;;
+    reiniciar) return 10 ;;
+    cancelar) printf 'Execução cancelada; nenhum provider foi iniciado.\n'; return 0 ;;
+  esac
+}
+
+run_wizard() {
+  require_profile_helper
+  play_splash
+  while true; do
+    if wizard_once; then return 0; fi
+    printf '\nReiniciando o assistente...\n' >&2
+  done
+}
+
+if [ "$#" -eq 0 ]; then
+  if [ -t 0 ] && [ -t 1 ]; then
+    run_wizard
+    exit 0
+  fi
+  usage
+  printf '\nERROR: No options were provided and stdin/stdout are not interactive; use --wizard in a terminal or pass a complete command.\n' >&2
+  exit 2
+fi
+
+if [ "${1:-}" = "profile" ]; then
+  run_profile_command "$@"
+  exit 0
+fi
+
+if [ "${1:-}" = "--wizard" ]; then
+  [ "$#" -eq 1 ] || die "--wizard does not accept additional options; answer them interactively"
+  run_wizard
+  exit 0
+fi
+
+EXPANDED_ARGS=()
+expand_profile_arguments "$@"
+set -- "${EXPANDED_ARGS[@]}"
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --project)
@@ -1837,6 +2227,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --dashboard|--tui)
       DASHBOARD=1
+      shift
+      ;;
+    --no-dashboard)
+      DASHBOARD=0
       shift
       ;;
     --watch)

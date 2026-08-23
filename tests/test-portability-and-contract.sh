@@ -203,6 +203,7 @@ INSTALL_PREFIX="$TEMP_ROOT/installed prefix"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/manager-audit.cjs" ] || fail "installed manager audit validator is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/operational-verifier.cjs" ] || fail "installed operational verifier is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/fragment-discovery.cjs" ] || fail "installed fragment discovery helper is missing"
+[ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/profiles.cjs" ] || fail "installed profile helper is missing"
 [ -f "$INSTALL_PREFIX/libexec/rb-ralph/VERSION" ] || fail "installed version marker is missing"
 [ -x "$INSTALL_PREFIX/bin/rb-ralph-watch" ] || fail "installed dashboard launcher is missing"
 ok "temporary-prefix installation keeps launcher and auxiliary resources together"
@@ -225,6 +226,23 @@ node -e '
       !capybara.every((feature) => frame.includes(feature))) process.exit(1);
 ' "$INSTALL_PREFIX/libexec/rb-ralph/lib/splash.cjs" "$PACKAGE_VERSION"
 ok "installed splash preserves the versioned Ralph capybara"
+
+# No-argument automation must fail promptly instead of consuming a CI stdin.
+expect_failure "$TEMP_ROOT/no-arguments.out" "$RALPH"
+assert_contains "$TEMP_ROOT/no-arguments.out" "stdin/stdout are not interactive" \
+  "no-argument non-interactive invocation never blocks waiting for wizard input"
+
+# An explicit wizard can be driven through stdin for deterministic smoke tests.
+printf '%s\n' "$REAL_PROJECT" '' '' '' '' '' '' '' mostrar | \
+  RB_RALPH_PROFILES_FILE="$TEMP_ROOT/wizard-config/profiles.json" \
+  "$RALPH" --wizard > "$TEMP_ROOT/wizard.out" 2> "$TEMP_ROOT/wizard.err"
+assert_contains "$TEMP_ROOT/wizard.out" "RB Ralph · execução assistida" \
+  "explicit wizard starts the assisted execution flow"
+assert_contains "$TEMP_ROOT/wizard.out" "--plan init-minimal-execution" \
+  "wizard discovers and selects a ready execution plan"
+assert_contains "$TEMP_ROOT/wizard.out" "--agent-provider codex" \
+  "wizard builds a provider command without starting it in show mode"
+assert_not_exists "$REAL_PROJECT/.rb/runs" "wizard show mode creates no run state"
 SPACE_PROJECT="$(new_project 'project with spaces')"
 (cd / && "$INSTALL_PREFIX/bin/rb-ralph" --project "$SPACE_PROJECT" --list) > "$TEMP_ROOT/spaces.out"
 assert_contains "$TEMP_ROOT/spaces.out" "init-minimal-execution" "installed layout supports paths containing spaces"
@@ -260,6 +278,80 @@ assert_contains "$CORE_TRACE" "path" "rb-harness on PATH is the final discovery 
 expect_failure "$TEMP_ROOT/core-error.out" env RB_RALPH_HOME="$EMPTY_HOME" PATH=/usr/bin:/bin \
   "$RALPH" --project "$REAL_PROJECT" --list
 assert_contains "$TEMP_ROOT/core-error.out" "Use --core-cli" "missing core reports actionable recovery options"
+
+# Reusable profiles are strict data, survive installation, and remain lower
+# precedence than flags supplied for a particular run.
+PROFILE_FILE="$TEMP_ROOT/profile-home/rb-ralph/profiles.json"
+printf '%s\n' '{
+  "description": "Mixed providers for contract tests.",
+  "agent": {"provider": "claude", "model": "opus", "effort": "high"},
+  "manager": {"provider": "codex", "model": "gpt-5.6-sol", "effort": "xhigh"},
+  "execution": {
+    "unit": "phase",
+    "managerAudit": "legacy",
+    "finalAudit": false,
+    "dashboard": false,
+    "permissionMode": "yolo"
+  }
+}' | RB_RALPH_PROFILES_FILE="$PROFILE_FILE" node "$PACKAGE_ROOT/lib/profiles.cjs" save mixed >/dev/null
+RB_RALPH_PROFILES_FILE="$PROFILE_FILE" "$RALPH" profile list > "$TEMP_ROOT/profiles-list.out"
+RB_RALPH_PROFILES_FILE="$PROFILE_FILE" "$RALPH" profile show mixed > "$TEMP_ROOT/profile-show.out"
+RB_RALPH_PROFILES_FILE="$PROFILE_FILE" "$RALPH" profile path > "$TEMP_ROOT/profile-path.out"
+assert_contains "$TEMP_ROOT/profiles-list.out" $'balanced\tbuilt-in' \
+  "profile list exposes immutable built-in strategies"
+assert_contains "$TEMP_ROOT/profiles-list.out" $'mixed\tuser' \
+  "profile list exposes a saved user strategy"
+assert_contains "$TEMP_ROOT/profile-show.out" '"contract": "rb-ralph-profiles/v1"' \
+  "profile show identifies the versioned data contract"
+assert_contains "$TEMP_ROOT/profile-path.out" "$PROFILE_FILE" \
+  "profile path honors the isolated profile-file override"
+node -e '
+  const fs = require("node:fs");
+  const mode = fs.statSync(process.argv[1]).mode & 0o777;
+  if (mode !== 0o600) process.exit(1);
+' "$PROFILE_FILE" || fail "saved profile file is not mode 0600"
+ok "saved profile file is private"
+
+printf '%s\n' '{"credential":"must-be-rejected","agent":{"provider":"codex"}}' | \
+  expect_failure "$TEMP_ROOT/profile-secret-field.out" env RB_RALPH_PROFILES_FILE="$PROFILE_FILE" \
+    node "$PACKAGE_ROOT/lib/profiles.cjs" save unsafe
+assert_contains "$TEMP_ROOT/profile-secret-field.out" "profile.credential is not supported" \
+  "profiles reject credential-like and all other unknown fields"
+expect_failure "$TEMP_ROOT/profile-built-in-delete.out" env RB_RALPH_PROFILES_FILE="$PROFILE_FILE" \
+  "$RALPH" profile delete balanced
+assert_contains "$TEMP_ROOT/profile-built-in-delete.out" "immutable" \
+  "built-in profiles cannot be changed or deleted"
+
+: > "$MOCK_STATE/roles.log"
+PROFILE_PROJECT="$(new_project profile-mixed-providers)"
+RB_RALPH_PROFILES_FILE="$PROFILE_FILE" run_role_project profile-mixed \
+  "$PROFILE_PROJECT" --profile mixed >/dev/null
+assert_contains "$MOCK_STATE/roles.log" "claude|agent" \
+  "saved profile configures the executor provider"
+assert_contains "$MOCK_STATE/roles.log" "codex|manager" \
+  "saved profile configures an independent manager provider"
+assert_contains "$MOCK_STATE/roles.log" "generic_agent_model=opus|generic_manager_model=gpt-5.6-sol" \
+  "saved profile preserves independent role models"
+
+: > "$MOCK_STATE/roles.log"
+PROFILE_OVERRIDE_PROJECT="$(new_project profile-explicit-override)"
+RB_RALPH_PROFILES_FILE="$PROFILE_FILE" run_role_project profile-override \
+  "$PROFILE_OVERRIDE_PROJECT" --profile mixed --provider opencode \
+  --model explicit-model --effort max >/dev/null
+assert_contains "$MOCK_STATE/roles.log" "opencode|agent" \
+  "explicit shared provider replaces the profile executor"
+assert_contains "$MOCK_STATE/roles.log" "opencode|manager" \
+  "explicit shared provider replaces the profile manager"
+assert_not_contains "$MOCK_STATE/roles.log" "claude|agent" \
+  "profile provider does not survive an explicit shared override"
+assert_contains "$MOCK_STATE/roles.log" \
+  "generic_agent_model=explicit-model|generic_manager_model=explicit-model" \
+  "explicit shared model replaces both role models from a profile"
+
+RB_RALPH_PROFILES_FILE="$PROFILE_FILE" "$RALPH" profile delete mixed >/dev/null
+RB_RALPH_PROFILES_FILE="$PROFILE_FILE" "$RALPH" profile list > "$TEMP_ROOT/profiles-after-delete.out"
+assert_not_contains "$TEMP_ROOT/profiles-after-delete.out" $'mixed\tuser' \
+  "profile delete removes only the named user strategy"
 
 # 6. --provider configures the same built-in provider for both independent roles.
 : > "$MOCK_STATE/roles.log"
@@ -1470,6 +1562,9 @@ assert_contains "$TEMP_ROOT/help.out" 'AUTONOMOUS CONTROL PLANE' "--help renders
 assert_contains "$TEMP_ROOT/help.out" 'capivara de plantão' "--help introduces the Ralph mascot"
 assert_contains "$TEMP_ROOT/help.out" '--splash' "--help exposes the standalone splash command"
 assert_contains "$TEMP_ROOT/help.out" '--no-splash' "--help exposes the splash opt-out"
+assert_contains "$TEMP_ROOT/help.out" '--wizard' "--help exposes the interactive command builder"
+assert_contains "$TEMP_ROOT/help.out" '--profile <name>' "--help exposes reusable execution profiles"
+assert_contains "$TEMP_ROOT/help.out" '--no-dashboard' "--help allows explicit profile dashboard override"
 
 # The splash is decoration: without a TTY it must stay silent and still succeed.
 "$RALPH" --splash > "$TEMP_ROOT/splash.out" 2>&1
