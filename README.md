@@ -124,7 +124,7 @@ Confirm the exact source or installed build at any time with:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.8.0
+# RB Ralph 0.8.1
 ```
 
 The installer prints and copies the same `VERSION` marker, so a source upgrade
@@ -722,6 +722,12 @@ ID. The same encrypted per-user vault is shared with RB Harness:
 rb-ralph --login
 rb-harness auth list
 
+rb-ralph provider list
+rb-ralph provider list --json
+
+rb-ralph provider test --provider deepseek \
+  --model deepseek-v4-pro --credential pessoal --timeout 60
+
 rb-ralph --project . --plan <artifact-id> \
   --agent-provider deepseek --agent-model deepseek-v4-pro \
   --agent-credential pessoal \
@@ -730,6 +736,14 @@ rb-ralph --project . --plan <artifact-id> \
   --agent-effort high --manager-effort high \
   --yolo --dashboard
 ```
+
+`provider list` and `provider test` delegate to Ralph's packaged Harness core,
+so both executables read the same provider registry and credential vault.
+The test performs one bounded `PING`/`PONG` API request only: it does not create
+a Ralph run, discover a plan, invoke an executor/manager, or modify the project.
+Use `--json` for the safe versioned diagnostic response.
+Credential selection accepts the full ID printed by `provider list`, its
+original label, or the normalized slug after the provider prefix.
 
 Direct providers require an explicit provider model ID. Credential references
 may be saved in profiles, but secret values never may. Executor and manager

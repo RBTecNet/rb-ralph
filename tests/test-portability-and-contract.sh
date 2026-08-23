@@ -219,6 +219,13 @@ assert_contains "$TEMP_ROOT/installed-help.out" "--splash" "installed runner exp
 RB_RALPH_CORE_CLI=/bin/echo "$RALPH" --login > "$TEMP_ROOT/login-delegation.out"
 assert_contains "$TEMP_ROOT/login-delegation.out" "auth login" \
   "Ralph login delegates to the shared RB Harness credential service"
+RB_RALPH_CORE_CLI=/bin/echo "$RALPH" provider list --json > "$TEMP_ROOT/provider-list-delegation.out"
+assert_contains "$TEMP_ROOT/provider-list-delegation.out" "provider list --json" \
+  "Ralph provider list delegates to the shared provider registry"
+RB_RALPH_CORE_CLI=/bin/echo "$RALPH" provider test --provider deepseek \
+  --model deepseek-v4-pro --credential pessoal > "$TEMP_ROOT/provider-test-delegation.out"
+assert_contains "$TEMP_ROOT/provider-test-delegation.out" "provider test --provider deepseek" \
+  "Ralph provider test delegates to the shared API connection probe"
 assert_contains "$PACKAGE_ROOT/bin/rb-ralph" '╰──◡◡──╯          RALPH · capivara de plantão' \
   "static brand preserves Ralph the capybara"
 assert_contains "$PACKAGE_ROOT/lib/dashboard.cjs" '╰──◡◡──╯${" ".repeat(10)}RALPH · capivara de plantão' \

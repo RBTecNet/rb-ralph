@@ -187,6 +187,7 @@ Usage:
   rb-ralph [options]
   rb-ralph --wizard
   rb-ralph --login
+  rb-ralph provider list|test [options]
   rb-ralph profile list|show <name>|delete <name>|path
 
 Quick start:
@@ -225,6 +226,9 @@ Quick start:
 
   # Configure and use native APIs without routing through another model CLI
   rb-ralph --login
+  rb-ralph provider list
+  rb-ralph provider test --provider deepseek --model deepseek-v4-pro \
+    --credential pessoal
   rb-ralph --project . --provider deepseek --model deepseek-v4-pro \
     --credential pessoal --yolo --dashboard
 
@@ -2083,6 +2087,17 @@ if [ "$#" -eq 0 ]; then
   usage
   printf '\nERROR: No options were provided and stdin/stdout are not interactive; use --wizard in a terminal or pass a complete command.\n' >&2
   exit 2
+fi
+
+if [ "${1:-}" = "provider" ]; then
+  case "${2:-}" in
+    list|test)
+      resolve_core_cli
+      core_cli_call "$@"
+      exit $?
+      ;;
+    *) die "provider requires list or test" ;;
+  esac
 fi
 
 if [ "${1:-}" = "profile" ]; then
