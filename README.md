@@ -85,7 +85,7 @@ To package a different compatible RB Harness CLI:
   --core-cli /path/to/rb-harness
 ```
 
-The bundled core is synchronized with RB Harness 0.3.9. Besides Ralph's
+The bundled core is synchronized with RB Harness 0.3.10. Besides Ralph's
 manifest and execution-plan commands, that core carries the additive
 `rb-headless-interview/v1` validator and durable hosted-interview boundary.
 Ralph itself still executes only ready `rb-execution/v1` plans; it does not
@@ -100,6 +100,9 @@ Manifest synchronization gives long or normalization-colliding artifact paths
 stable hash-suffixed IDs. A completed Harness writer generation is checkpointed
 before deterministic validation, so `rb-harness resume` can continue from the
 staged tree without spending another writer call after a manifest gate fails.
+An audit can block for developer input only when it carries a concrete
+question and two to five incompatible product alternatives. Decisionless
+legacy blocks resume from their preserved staged draft as technical repairs.
 
 ### Uninstallation
 
@@ -140,7 +143,7 @@ Confirm the exact source or installed build at any time with:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.8.9
+# RB Ralph 0.8.10
 ```
 
 The installer prints and copies the same `VERSION` marker, so a source upgrade
