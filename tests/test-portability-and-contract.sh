@@ -202,6 +202,7 @@ INSTALL_PREFIX="$TEMP_ROOT/installed prefix"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/splash.cjs" ] || fail "installed splash helper is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/process-supervisor.cjs" ] || fail "installed process supervisor is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/evidence-index.cjs" ] || fail "installed evidence index is missing"
+[ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/validation-cache.cjs" ] || fail "installed validation cache is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/manager-audit.cjs" ] || fail "installed manager audit validator is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/operational-verifier.cjs" ] || fail "installed operational verifier is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/fragment-discovery.cjs" ] || fail "installed fragment discovery helper is missing"
@@ -678,6 +679,7 @@ grep -Fq 'manual: inspect generated evidence' "$RB_RALPH_VALIDATION_LOG"
 grep -Fq 'VALIDATION_COMMANDS: 1' "$prompt"
 grep -Fq 'MANUAL_VALIDATIONS: 1' "$prompt"
 grep -Fq 'AC-T001-01' "$prompt"
+grep -Fq 'Do not run, repeat, or independently re-create a command already represented' "$prompt"
 printf '%s\n' 'RB_RALPH_DECISION: COMPLETE' 'RB_RALPH_REASON: all evidence inspected'
 EVIDENCE_MANAGER
 chmod +x "$TEMP_ROOT/evidence-agent" "$TEMP_ROOT/evidence-manager"
@@ -693,6 +695,8 @@ MOCK_RUN_TAG=evidence "$RALPH" --project "$TITLE_PROJECT" --max-attempts 1 \
   --agent-cmd "$TEMP_ROOT/evidence-agent" --manager-cmd "$TEMP_ROOT/evidence-manager" \
   > "$TEMP_ROOT/evidence.out"
 assert_contains "$TEMP_ROOT/evidence.out" "P01 complete" "real execution preserves title and supplies complete manager evidence"
+assert_contains "$MOCK_STATE/evidence-manager.prompt" "RB Ralph is the sole executor" \
+  "manager is prohibited from repeating orchestrator-owned validation commands"
 
 # 15. An executor failure cannot be converted to COMPLETE by an optimistic manager.
 cat > "$TEMP_ROOT/failing-agent" <<'FAILING_AGENT'

@@ -68,7 +68,7 @@ No auxiliary resource is written directly to `/bin`. The layout is:
     ├── bin/{rb-ralph,rb-ralph-watch}
     ├── adapters/{adapter-utils,api,codex,claude,opencode}.sh
     ├── core/rb-harness.cjs
-    ├── lib/{evidence,evidence-index,manager-audit,control-plane,process-supervisor,operational-verifier,fragment-discovery,profiles,provider-telemetry,usage-summary,dashboard}.cjs
+    ├── lib/{evidence,evidence-index,validation-cache,manager-audit,control-plane,process-supervisor,operational-verifier,fragment-discovery,profiles,provider-telemetry,usage-summary,dashboard}.cjs
     ├── VERSION
     ├── pricing.example.json
     └── README.md
@@ -143,7 +143,7 @@ Confirm the exact source or installed build at any time with:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.8.10
+# RB Ralph 0.8.11
 ```
 
 The installer prints and copies the same `VERSION` marker, so a source upgrade
@@ -458,8 +458,11 @@ Codex caches or from the monorepo's internal layout participates in discovery.
 - Uses provider-neutral executable adapters that read prompts from stdin.
 - Includes built-in Codex and Claude Code adapters, including mixed-provider
   runs.
-- Runs every backtick-delimited validation command in the phase and prevents
-  manager approval from overriding a deterministic failure.
+- Gives declared deterministic validations one authority: Ralph. Identical
+  commands are deduplicated, successful phase evidence is cached, and retries
+  rerun only commands whose task scopes intersect the actual changed paths.
+  Missing, ambiguous, or incomplete scope evidence falls back to every unique
+  phase command. A manager cannot override a deterministic failure.
 - Passes prior manager feedback and validation logs into retry prompts.
 - Runs independent pending tasks concurrently when every selected task is
   marked parallel-safe and no selected task depends on another.
@@ -646,6 +649,14 @@ arbitrary source and log contents. An adapter for a remote model without
 filesystem access must therefore implement its own bounded and redacted
 evidence transport before it can satisfy this contract; otherwise it must
 reject manager use clearly.
+
+In the default `--validation-mode run`, the manager must not execute or repeat
+a command already represented in `RB_RALPH_VALIDATION_LOG` or
+`RB_RALPH_EVIDENCE_INDEX`. Ralph owns those command results. The manager audits
+changed source, contracts, acceptance coverage, and evidence provenance; a
+genuinely missing check is returned as one `UNPROVEN` finding for the next
+executor/orchestrator cycle. The runtime-only `RBF` phase remains intentionally
+independent and repeats one real consumer workflow in a clean environment.
 
 The agent may implement its task. By default (`--manager-audit exhaustive`),
 the manager must inspect without repairing, finish the entire required matrix,
@@ -1198,9 +1209,15 @@ client configuration.
 
 ## Deterministic validation
 
-Default mode executes each validation command from `PHASES.md` after the
-implementation agent and captures output plus exit code. Each command has a
-900-second timeout when GNU `timeout` is available:
+Default mode executes the unique validation commands from `PHASES.md` after
+the implementation agent and captures output plus exit code. The first phase
+attempt establishes the complete command baseline. After a retry, Ralph maps
+the actual added/modified/deleted paths to the machine-bounded backtick paths
+in each task's `Scope`, invalidates affected tasks and their dependents, and
+reuses prior successful results for unaffected commands. If even one changed
+path is outside the declared scopes, a scope is not machine-bounded, or changed
+path collection is incomplete, every unique command runs again. Each executed
+command has a 900-second timeout when GNU `timeout` is available:
 
 ```bash
 bin/rb-ralph --project . --provider codex \
@@ -1209,7 +1226,14 @@ bin/rb-ralph --project . --provider codex \
 
 Set `--validation-timeout 0` to disable the timeout. For a controlled adapter
 that owns all validation, use `--validation-mode manager`. This is less strict
-and is mainly useful for non-shell validation environments.
+and is mainly useful for non-shell validation environments; it deliberately
+disables Ralph's command authority, deduplication, and incremental cache.
+
+Several tasks may name the same broad command, such as `npm test`. Ralph runs
+that command once and records every owning task ID on the canonical evidence
+row. Cache entries live only inside the immutable plan-hash run directory, so a
+changed `PHASES.md` starts a new validation baseline instead of importing proof
+from an older contract.
 
 `manual:` is reserved for a precise inspection the technical manager can make
 from repository or produced evidence. `human:` means the evidence needs a
@@ -1248,6 +1272,7 @@ Run the portable runner contract suite from the workspace root:
 ```bash
 bash tests/test-portability-and-contract.sh
 bash tests/test-execution-parallelism.sh
+bash tests/test-validation-cache.sh
 ```
 
 It covers real and symlink launchers, temporary installation, spaces in paths,
@@ -1257,7 +1282,9 @@ telemetry, configured pricing, dashboard snapshots, progress beyond three
 attempts, no-progress interruption, isolated manager retries, hard caps, and
 durable resume feedback. The parallelism suite additionally proves bounded task
 concurrency, mandatory worktree isolation, primary-tree atomicity, ordinary Git
-conflict handling, and rejection of same-path sibling patches.
+conflict handling, and rejection of same-path sibling patches. The validation
+cache suite proves command deduplication, affected-scope invalidation, safe
+reuse, and conservative full fallback.
 
 ## Deliberate first-version limits
 

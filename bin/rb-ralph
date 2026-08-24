@@ -26,6 +26,7 @@ TELEMETRY_HELPER="$RB_RALPH_HOME/lib/provider-telemetry.cjs"
 USAGE_HELPER="$RB_RALPH_HOME/lib/usage-summary.cjs"
 PROCESS_SUPERVISOR="$RB_RALPH_HOME/lib/process-supervisor.cjs"
 EVIDENCE_INDEX_HELPER="$RB_RALPH_HOME/lib/evidence-index.cjs"
+VALIDATION_CACHE_HELPER="$RB_RALPH_HOME/lib/validation-cache.cjs"
 MANAGER_AUDIT_HELPER="$RB_RALPH_HOME/lib/manager-audit.cjs"
 OPERATIONAL_VERIFIER="$RB_RALPH_HOME/lib/operational-verifier.cjs"
 CONTROL_PLANE_HELPER="$RB_RALPH_HOME/lib/control-plane.cjs"
@@ -2682,6 +2683,7 @@ configure_roles
 [ -f "$EVIDENCE_HELPER" ] || die "RB Ralph evidence helper not found: $EVIDENCE_HELPER; reinstall the complete package instead of copying only bin/rb-ralph"
 [ -f "$PROCESS_SUPERVISOR" ] || die "RB Ralph process supervisor not found: $PROCESS_SUPERVISOR; reinstall the complete package instead of copying only bin/rb-ralph"
 [ -f "$EVIDENCE_INDEX_HELPER" ] || die "RB Ralph evidence-index helper not found: $EVIDENCE_INDEX_HELPER; reinstall the complete package"
+[ -f "$VALIDATION_CACHE_HELPER" ] || die "RB Ralph validation-cache helper not found: $VALIDATION_CACHE_HELPER; reinstall the complete package"
 [ -f "$MANAGER_AUDIT_HELPER" ] || die "RB Ralph manager-audit helper not found: $MANAGER_AUDIT_HELPER; reinstall the complete package"
 [ -f "$CONTROL_PLANE_HELPER" ] || die "RB Ralph control-plane helper not found: $CONTROL_PLANE_HELPER; reinstall the complete package instead of copying only bin/rb-ralph"
 if [ -t 1 ] && [ "$DASHBOARD" -eq 0 ]; then
@@ -2798,6 +2800,10 @@ while IFS= read -r tsv_row; do
     core_cli_call contract extract "$PLAN_ABSOLUTE" --phase "$phase_id" > "$PHASE_FILE"
     VALIDATIONS="$(core_cli_call contract validations "$PLAN_ABSOLUTE" --phase "$phase_id" --format tsv)"
     TASKS="$(core_cli_call contract tasks "$PLAN_ABSOLUTE" --phase "$phase_id" --format tsv)"
+    TASK_DETAILS_FILE="$STATE_DIR/phases/$phase_id-tasks.json"
+    VALIDATION_DETAILS_FILE="$STATE_DIR/phases/$phase_id-validations.json"
+    core_cli_call contract tasks "$PLAN_ABSOLUTE" --phase "$phase_id" --format json > "$TASK_DETAILS_FILE"
+    core_cli_call contract validations "$PLAN_ABSOLUTE" --phase "$phase_id" --format json > "$VALIDATION_DETAILS_FILE"
   fi
   HUMAN_VALIDATION_SUMMARY="$(
     while IFS= read -r validation_row; do
@@ -3155,25 +3161,44 @@ while IFS= read -r tsv_row; do
       manual_validations=1
       printf '\n[RBT-FINAL] no rb-operational/v1 contract; independent manager must derive and execute a clean-room product scenario.\n' >> "$VALIDATION_LOG"
     elif [ "$VALIDATION_MODE" = "run" ]; then
+      VALIDATION_CACHE_FILE="$STATE_DIR/evidence/$phase_id-validation-cache.json"
+      VALIDATION_SELECTION_FILE="$STATE_DIR/evidence/$phase_id-attempt-$attempt-validation-selection.tsv"
+      node "$VALIDATION_CACHE_HELPER" select \
+        "$TASK_DETAILS_FILE" "$VALIDATION_DETAILS_FILE" "$CHANGED_PATHS_FILE" "$VALIDATION_CACHE_FILE" \
+        > "$VALIDATION_SELECTION_FILE" \
+        || die "$phase_id could not select bounded incremental validations"
+      validation_impact="$(awk -F '\t' '$1 == "meta" && $2 == "impact" { print $3; exit }' "$VALIDATION_SELECTION_FILE")"
+      validation_impact_reason="$(awk -F '\t' '$1 == "meta" && $2 == "impact" { print $4; exit }' "$VALIDATION_SELECTION_FILE")"
+      printf 'impact=%s reason=%s\n' "${validation_impact:-full}" "${validation_impact_reason:-unavailable}" >> "$VALIDATION_LOG"
       while IFS= read -r validation_row; do
-        IFS="$TSV_SEPARATOR" read -r validation_task validation_kind validation_value \
+        IFS="$TSV_SEPARATOR" read -r validation_task validation_kind validation_value validation_action validation_key validation_provenance \
           <<< "${validation_row//$'\t'/$TSV_SEPARATOR}"
-        [ "$validation_task" = "task_id" ] && continue
+        [ "$validation_task" = "meta" ] && continue
         case "$validation_kind" in
           command)
             validation_commands=$((validation_commands + 1))
             printf '\n[%s] command: %s\n' "$validation_task" "$validation_value" >> "$VALIDATION_LOG"
-            validation_rc=0
-            validation_started="$(date +%s)"
-            if [ "$VALIDATION_TIMEOUT" -gt 0 ] && command -v timeout >/dev/null 2>&1; then
-              (cd "$PROJECT" && timeout --foreground "${VALIDATION_TIMEOUT}s" bash -lc "$validation_value") \
-                >> "$VALIDATION_LOG" 2>&1 || validation_rc=$?
+            if [ "$validation_action" = "reuse" ]; then
+              validation_rc=0
+              printf '[%s] exit=0 duration_seconds=0 reused_from=%s\n' \
+                "$validation_task" "${validation_provenance:-validation-cache}" >> "$VALIDATION_LOG"
             else
-              (cd "$PROJECT" && bash -lc "$validation_value") >> "$VALIDATION_LOG" 2>&1 || validation_rc=$?
+              validation_rc=0
+              validation_started="$(date +%s)"
+              if [ "$VALIDATION_TIMEOUT" -gt 0 ] && command -v timeout >/dev/null 2>&1; then
+                (cd "$PROJECT" && timeout --foreground "${VALIDATION_TIMEOUT}s" bash -lc "$validation_value") \
+                  >> "$VALIDATION_LOG" 2>&1 || validation_rc=$?
+              else
+                (cd "$PROJECT" && bash -lc "$validation_value") >> "$VALIDATION_LOG" 2>&1 || validation_rc=$?
+              fi
+              validation_duration=$(( $(date +%s) - validation_started ))
+              printf '[%s] exit=%s duration_seconds=%s\n' \
+                "$validation_task" "$validation_rc" "$validation_duration" >> "$VALIDATION_LOG"
+              node "$VALIDATION_CACHE_HELPER" record "$VALIDATION_CACHE_FILE" "$validation_key" \
+                "$validation_task" "$validation_kind" "$validation_value" "$validation_rc" \
+                "${VALIDATION_LOG#"$PROJECT/"}" \
+                || die "$phase_id could not persist validation evidence"
             fi
-            validation_duration=$(( $(date +%s) - validation_started ))
-            printf '[%s] exit=%s duration_seconds=%s\n' \
-              "$validation_task" "$validation_rc" "$validation_duration" >> "$VALIDATION_LOG"
             if [ "$validation_rc" -ne 0 ]; then
               validation_failures=$((validation_failures + 1))
             fi
@@ -3186,7 +3211,7 @@ while IFS= read -r tsv_row; do
             printf '\n[%s] human: %s\n' "$validation_task" "$validation_value" >> "$VALIDATION_LOG"
             ;;
         esac
-      done <<< "$VALIDATIONS"
+      done < "$VALIDATION_SELECTION_FILE"
     else
       printf 'Deterministic commands delegated to manager by configuration.\n' >> "$VALIDATION_LOG"
     fi
@@ -3238,6 +3263,13 @@ while IFS= read -r tsv_row; do
           'For desktop/mobile software, require honest platform-appropriate launch/package/UI evidence; for CLI, library, service, plugin, package, or job, exercise its real consumer boundary.' \
           'If the operational workflow, documentation, packaging, configuration, startup, or integration is defective, return RETRY with the exact failing command/probe and observed output so the executor can repair it.' \
           'A missing external credential may be BLOCKED only when no credential-free documented scenario can prove the delivered behavior.' \
+          ''
+      elif [ "$VALIDATION_MODE" = "run" ]; then
+        printf '%s\n' \
+          'VALIDATION AUTHORITY: RB Ralph is the sole executor of every declared deterministic validation command for this phase.' \
+          'Do not run, repeat, or independently re-create a command already represented in VALIDATION_LOG or EVIDENCE_INDEX, even for confirmation.' \
+          'A reused successful row is authoritative only because Ralph proved that the current changed-path set is fully covered by declared task scopes and did not affect that cached command.' \
+          'Review source, contracts, changed boundaries, and the bounded evidence. If a genuinely missing check is required, return it once as an UNPROVEN finding for the executor/orchestrator; do not execute it in the manager call.' \
           ''
       fi
       printf '%s\n' \

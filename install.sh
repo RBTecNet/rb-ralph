@@ -128,6 +128,7 @@ install -m 0755 "$SOURCE_ROOT/lib/dashboard.cjs" "$INSTALL_HOME/lib/dashboard.cj
 install -m 0755 "$SOURCE_ROOT/lib/splash.cjs" "$INSTALL_HOME/lib/splash.cjs"
 install -m 0755 "$SOURCE_ROOT/lib/process-supervisor.cjs" "$INSTALL_HOME/lib/process-supervisor.cjs"
 install -m 0755 "$SOURCE_ROOT/lib/evidence-index.cjs" "$INSTALL_HOME/lib/evidence-index.cjs"
+install -m 0755 "$SOURCE_ROOT/lib/validation-cache.cjs" "$INSTALL_HOME/lib/validation-cache.cjs"
 install -m 0755 "$SOURCE_ROOT/lib/manager-audit.cjs" "$INSTALL_HOME/lib/manager-audit.cjs"
 install -m 0755 "$SOURCE_ROOT/lib/operational-verifier.cjs" "$INSTALL_HOME/lib/operational-verifier.cjs"
 install -m 0755 "$SOURCE_ROOT/lib/fragment-discovery.cjs" "$INSTALL_HOME/lib/fragment-discovery.cjs"
