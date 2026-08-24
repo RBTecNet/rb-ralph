@@ -1,5 +1,7 @@
 # RB Ralph
 
+[English](README.md) · [Português do Brasil](README.pt-BR.md)
+
 RB Ralph is the optional execution consumer for RB Harness artifacts. It is a
 provider-neutral Bash run manager: implementation agents change code, a
 technical-manager LLM reviews evidence, and deterministic gates retain final
@@ -85,7 +87,7 @@ To package a different compatible RB Harness CLI:
   --core-cli /path/to/rb-harness
 ```
 
-The bundled core is synchronized with RB Harness 0.3.10. Besides Ralph's
+The bundled core is synchronized with RB Harness 0.3.11. Besides Ralph's
 manifest and execution-plan commands, that core carries the additive
 `rb-headless-interview/v1` validator and durable hosted-interview boundary.
 Ralph itself still executes only ready `rb-execution/v1` plans; it does not
