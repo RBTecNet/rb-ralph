@@ -85,11 +85,16 @@ To package a different compatible RB Harness CLI:
   --core-cli /path/to/rb-harness
 ```
 
-The bundled core is synchronized with RB Harness 0.3.7. Besides Ralph's
+The bundled core is synchronized with RB Harness 0.3.8. Besides Ralph's
 manifest and execution-plan commands, that core carries the additive
 `rb-headless-interview/v1` validator and durable hosted-interview boundary.
 Ralph itself still executes only ready `rb-execution/v1` plans; it does not
 turn an unfinished interview into executable authority.
+
+Harness generation providers may emit up to 128 MiB while interview and audit
+providers remain limited to 32 MiB. Limits are measured as UTF-8 bytes, and a
+timeout or overflow recursively terminates nested provider processes so a
+sandboxed tool cannot remain orphaned after its parent exits.
 
 ### Uninstallation
 
@@ -130,7 +135,7 @@ Confirm the exact source or installed build at any time with:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.8.7
+# RB Ralph 0.8.8
 ```
 
 The installer prints and copies the same `VERSION` marker, so a source upgrade
