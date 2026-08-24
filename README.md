@@ -85,6 +85,12 @@ To package a different compatible RB Harness CLI:
   --core-cli /path/to/rb-harness
 ```
 
+The bundled core is synchronized with RB Harness 0.3.7. Besides Ralph's
+manifest and execution-plan commands, that core carries the additive
+`rb-headless-interview/v1` validator and durable hosted-interview boundary.
+Ralph itself still executes only ready `rb-execution/v1` plans; it does not
+turn an unfinished interview into executable authority.
+
 ### Uninstallation
 
 Use the same prefix chosen during installation:
@@ -124,7 +130,7 @@ Confirm the exact source or installed build at any time with:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.8.4
+# RB Ralph 0.8.7
 ```
 
 The installer prints and copies the same `VERSION` marker, so a source upgrade
