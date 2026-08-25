@@ -56,7 +56,7 @@ Confira a versão:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.9.0
+# RB Ralph 0.9.1
 ```
 
 Para remover apenas os recursos identificados como pertencentes ao Ralph:
@@ -341,6 +341,21 @@ declarada, então uma seção truncada nunca se lê como completa.
 
 `RB_RALPH_AGENT_CONTEXT=0`, `RB_RALPH_AGENT_CONTEXT_BYTES` e
 `RB_RALPH_MANAGER_CONTEXT_BYTES` definem os mesmos valores pelo ambiente.
+
+## Foco do painel
+
+A tabela de tasks acompanha a unidade em execução. Quando ela não cabe no
+terminal, a janela se centra na task que está rodando, mantém o cabeçalho da
+fase à vista — para que uma task visível sempre diga a que fase pertence — e
+informa o que ficou escondido de cada lado (`↑ 14 acima · ↓ 10 abaixo`) em vez
+de encerrar a lista em silêncio.
+
+Isso falhava de um jeito fácil de confundir com travamento: a âncora procurava o
+ID da fase corrente no texto **já renderizado**, mas toda linha começa com uma
+borda colorida, então a busca nunca casava e a janela se fixava no topo da
+tabela. Uma fase longa exibia apenas suas tasks concluídas enquanto a que
+realmente executava ficava abaixo do corte. As linhas passam a ser marcadas na
+construção, então o foco não depende mais de interpretar texto feito para tela.
 
 ## Atividade das chamadas
 

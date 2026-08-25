@@ -145,7 +145,7 @@ Confirm the exact source or installed build at any time with:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.9.0
+# RB Ralph 0.9.1
 ```
 
 The installer prints and copies the same `VERSION` marker, so a source upgrade
@@ -964,6 +964,20 @@ stated, so a truncated section can never read as a complete one.
 
 `RB_RALPH_AGENT_CONTEXT=0`, `RB_RALPH_AGENT_CONTEXT_BYTES`, and
 `RB_RALPH_MANAGER_CONTEXT_BYTES` set the same values from the environment.
+
+## Panel focus
+
+The task table follows the unit being worked on. When it does not fit the
+terminal, the window centres on the running task, keeps its phase heading in
+view so a visible task always says where it belongs, and reports what is hidden
+on each side (`↑ 14 acima · ↓ 10 abaixo`) rather than ending the list silently.
+
+This used to fail in a way that was easy to misread as a stall: the anchor
+searched the *rendered* rows for the current phase ID, but every row starts with
+a coloured box border, so the match never succeeded and the window pinned itself
+to the top of the table. A long phase therefore showed only its finished tasks
+while the one actually executing sat below the cut. Rows are now tagged as they
+are built, so the focus never depends on parsing text meant for a screen.
 
 ## Call activity
 
