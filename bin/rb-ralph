@@ -27,6 +27,8 @@ USAGE_HELPER="$RB_RALPH_HOME/lib/usage-summary.cjs"
 PROCESS_SUPERVISOR="$RB_RALPH_HOME/lib/process-supervisor.cjs"
 EVIDENCE_INDEX_HELPER="$RB_RALPH_HOME/lib/evidence-index.cjs"
 VALIDATION_CACHE_HELPER="$RB_RALPH_HOME/lib/validation-cache.cjs"
+AGENT_CONTEXT_HELPER="$RB_RALPH_HOME/lib/agent-context.cjs"
+AGENT_ACTIVITY_HELPER="$RB_RALPH_HOME/lib/agent-activity.cjs"
 MANAGER_AUDIT_HELPER="$RB_RALPH_HOME/lib/manager-audit.cjs"
 OPERATIONAL_VERIFIER="$RB_RALPH_HOME/lib/operational-verifier.cjs"
 CONTROL_PLANE_HELPER="$RB_RALPH_HOME/lib/control-plane.cjs"
@@ -119,6 +121,11 @@ RATE_LIMIT_WAIT="${RB_RALPH_RATE_LIMIT_WAIT:-60}"
 MAX_RATE_LIMIT_WAITS="${RB_RALPH_MAX_RATE_LIMIT_WAITS:-20}"
 MAX_RATE_LIMIT_WAIT="${RB_RALPH_MAX_RATE_LIMIT_WAIT:-3600}"
 ISOLATION="${RB_RALPH_ISOLATION:-shared}"
+# Pre-loaded repository context for a fresh executor call. On by default: the
+# agent otherwise rediscovers what the orchestrator already resolved.
+AGENT_CONTEXT="${RB_RALPH_AGENT_CONTEXT:-1}"
+AGENT_CONTEXT_BYTES="${RB_RALPH_AGENT_CONTEXT_BYTES:-49152}"
+MANAGER_CONTEXT_BYTES="${RB_RALPH_MANAGER_CONTEXT_BYTES:-65536}"
 MEMORY_MCP_URL="${RB_RALPH_MEMORY_MCP_URL:-}"
 MEMORY_MODE="${RB_RALPH_MEMORY_MODE:-}"
 MEMORY_TOKEN_ENV="${RB_RALPH_MEMORY_TOKEN_ENV:-RB_MEMORY_TOKEN}"
@@ -289,6 +296,10 @@ Options:
   --max-limit-waits <n>  Maximum provider-limit waits per phase (default: 20)
   --max-limit-wait <n>   Cap one provider-requested wait (default: 3600 seconds)
   --isolation <mode>     shared or worktree; parallel execution requires worktree
+  --no-agent-context     Do not pre-load task scope, phase context, and project
+                         tree into the executor prompt (it is on by default)
+  --agent-context-bytes <n>
+                         Byte budget for that pre-loaded context (default: 49152)
   --memory-url <url>     Optional RB Memory Streamable HTTP MCP URL
   --memory-mode <mode>   off, required, or best-effort (default: required with URL)
   --memory-token-env <n> Bearer-token environment variable (default: RB_MEMORY_TOKEN)
@@ -1035,6 +1046,19 @@ write_agent_prompt() {
     fi
     printf '%s\n' '' '--- VALIDATED WORK ITEM ---'
     cat "$content"
+    # The orchestrator already resolved the task scope, the phase context, the
+    # project tree, and what earlier tasks changed. Handing that over turns the
+    # agent's first several rediscovery turns into zero.
+    if [ "${AGENT_CONTEXT:-1}" != "0" ] && [ -n "$task_id" ]; then
+      node "$AGENT_CONTEXT_HELPER" \
+        --root "$execution_root" \
+        --tasks "${TASK_DETAILS_FILE:-}" \
+        --task "$task_id" \
+        --changes "${CHANGED_PATHS_FILE:-}" \
+        --before "${BEFORE_SNAPSHOT:-}" \
+        --phase-file "$content" \
+        --max-bytes "${AGENT_CONTEXT_BYTES:-49152}" 2>/dev/null || true
+    fi
   } > "$output"
 }
 
@@ -1086,6 +1110,16 @@ invoke_agent() {
   cp -- "$provider_output" "$temporary_output"
   chmod 600 "$temporary_output"
   mv "$temporary_output" "$output"
+  # Tokens alone hide the shape of a call: a task at 1.5M input tokens may be
+  # genuinely large, or an agent looping on rediscovery. The command count is
+  # what separates them, so record it beside the run instead of leaving it
+  # buried in a megabyte of provider log.
+  # One file per call, like usage/: a shared append-only file would be modified
+  # after the control-plane snapshot on a provider-availability retry, and the
+  # orchestrator would then read its own bookkeeping as forged prior evidence.
+  mkdir -p "$STATE_DIR/activity"
+  node "$AGENT_ACTIVITY_HELPER" "$output" "$phase_id/${task_id:-phase}-attempt-$attempt" \
+    "$STATE_DIR/activity/$(basename "${output%.log}").tsv" 2>/dev/null || true
   if [ -f "$temporary_telemetry" ]; then
     mkdir -p "$(dirname "$telemetry")"
     mv "$temporary_telemetry" "$telemetry"
@@ -1673,14 +1707,29 @@ provider_wait_seconds() {
 }
 
 reset_task_call_outputs() {
+  # The prompt is an output of the call, not durable prior evidence. It was
+  # once byte-stable, so rewriting it in place was invisible; now that it
+  # carries pre-loaded repository context it legitimately differs between two
+  # invocations of the same logical attempt, and leaving the stale one behind
+  # would make the control-plane snapshot read the orchestrator's own
+  # bookkeeping as forged evidence. This applies to a phase call as much as to
+  # a task call, so it runs before the execution-unit check.
+  rm -f -- "$AGENT_PROMPT" "$STATE_DIR/activity/$(basename "${AGENT_LOG%.log}").tsv"
   [ "$EXECUTION_UNIT" = "task" ] || return 0
-  local current_task task_log task_usage task_submission
+  local current_task task_log task_usage task_submission task_prompt task_activity
   rm -f -- "$AGENT_LOG"
   for current_task in "${PENDING_TASK_IDS[@]+"${PENDING_TASK_IDS[@]}"}"; do
     task_log="$STATE_DIR/logs/$phase_id-$current_task-attempt-$attempt-agent.log"
     task_usage="$USAGE_DIR/$phase_id-$current_task-attempt-$attempt-agent.usage.json"
     task_submission="$STATE_DIR/evidence/$phase_id-$current_task-attempt-$attempt-agent-submission"
-    rm -f -- "$task_log" "$task_usage"
+    # The prompt is an output of the call, not durable prior evidence. It was
+    # once byte-stable, so rewriting it in place was invisible; now that it
+    # carries pre-loaded repository context it legitimately differs between two
+    # reinvocations of the same logical attempt, and leaving the old one in
+    # place would make the control-plane snapshot read that as forged evidence.
+    task_prompt="$STATE_DIR/prompts/$phase_id-$current_task-attempt-$attempt-agent.txt"
+    task_activity="$STATE_DIR/activity/$phase_id-$current_task-attempt-$attempt-agent.tsv"
+    rm -f -- "$task_log" "$task_usage" "$task_prompt" "$task_activity"
     [ ! -d "$task_submission" ] || rm -rf -- "$task_submission"
   done
 }
@@ -2328,6 +2377,16 @@ while [ "$#" -gt 0 ]; do
     --max-limit-wait)
       [ "$#" -ge 2 ] || die "--max-limit-wait requires seconds"
       MAX_RATE_LIMIT_WAIT="$2"
+      shift 2
+      ;;
+    --no-agent-context)
+      AGENT_CONTEXT=0
+      shift
+      ;;
+    --agent-context-bytes)
+      [ "$#" -ge 2 ] || die "--agent-context-bytes requires a byte budget"
+      case "$2" in ''|*[!0-9]*) die "--agent-context-bytes requires a non-negative integer" ;; esac
+      AGENT_CONTEXT_BYTES="$2"
       shift 2
       ;;
     --isolation)
@@ -3306,8 +3365,17 @@ while IFS= read -r tsv_row; do
         printf '%s\n' '(none)'
       fi
       printf '%s\n' '' \
-        '--- CHANGED PATH SUMMARY (inspect current file contents in PROJECT_ROOT) ---'
+        '--- CHANGED PATH SUMMARY ---'
       cat "$CHANGED_PATHS_FILE"
+      # The reviewer used to be told to inspect PROJECT_ROOT itself, and did:
+      # an observed audit spent 194k input tokens re-reading a tree the
+      # orchestrator had already diffed. Same bytes, same moment, no round trip.
+      if [ "${AGENT_CONTEXT:-1}" != "0" ]; then
+        node "$AGENT_CONTEXT_HELPER" --mode manager \
+          --root "$PROJECT" \
+          --changes "$CHANGED_PATHS_FILE" \
+          --max-bytes "${MANAGER_CONTEXT_BYTES:-65536}" 2>/dev/null || true
+      fi
       printf '%s\n' '' \
         '--- BOUNDED CANONICAL EVIDENCE INDEX ---'
       cat "$EVIDENCE_INDEX_FILE"

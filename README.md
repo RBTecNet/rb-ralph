@@ -145,7 +145,7 @@ Confirm the exact source or installed build at any time with:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.8.11
+# RB Ralph 0.9.0
 ```
 
 The installer prints and copies the same `VERSION` marker, so a source upgrade
@@ -928,6 +928,52 @@ the combined patch to the primary tree when all checks succeed. Changes under
 manager. Patches that touch the same path are rejected even when their hunks
 would merge cleanly. Any overlap or conflict leaves the primary tree unchanged
 and stores individual patches under the active run's `patches/` directory.
+
+## Pre-loaded repository context
+
+Every task runs in a fresh process with no session, so the agent rediscovers the
+repository from scratch. Measured on a real run: the prompt RB Ralph handed over
+was 3.7 KB, and the agent then spent 445k-1520k input tokens per task, with 82%
+of its shell commands being rediscovery — listing files, grepping for modules,
+and re-reading the very plan the prompt already carried in extract form. The
+manager did the same, spending 194k input tokens re-reading a tree RB Ralph had
+already diffed.
+
+RB Ralph already knows all of it. The task declares its `Scope`, the phase
+declares its `Context`, and the evidence snapshot catalogues the tree and what
+earlier tasks changed. That state is now handed to the executor and the manager
+instead of being hunted:
+
+- the current content of the files the task declares in `Scope`, or a note
+  naming the scope paths that do not exist yet;
+- the paths earlier tasks in the same phase already changed;
+- the project file list from the orchestrator's own snapshot;
+- the phase's `Context` documents;
+- for the manager, the current content of the changed paths, source first,
+  lockfiles left out.
+
+This is not new authority. It is the current repository state, which the
+executor's authority order already ranks second, delivered rather than searched
+for. Every section is bounded by a declared byte budget and every omission is
+stated, so a truncated section can never read as a complete one.
+
+```bash
+--no-agent-context           # turn it off; it is on by default
+--agent-context-bytes <n>    # byte budget for the executor section (default 49152)
+```
+
+`RB_RALPH_AGENT_CONTEXT=0`, `RB_RALPH_AGENT_CONTEXT_BYTES`, and
+`RB_RALPH_MANAGER_CONTEXT_BYTES` set the same values from the environment.
+
+## Call activity
+
+Token totals hide the shape of a call. One observed task reported 1.52M input
+tokens against neighbours at ~500k, and only its raw log showed why: 34 shell
+commands instead of ~20. Each provider call now records its command, edit, and
+message counts under the run's `activity/` directory, so a large task can be
+told apart from an agent looping on rediscovery. A provider stream this cannot
+read is reported as `unmeasured`, never as zero.
+
 
 Use Claude Code for both roles:
 

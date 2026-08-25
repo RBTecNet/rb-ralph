@@ -56,7 +56,7 @@ Confira a versão:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.8.11
+# RB Ralph 0.9.0
 ```
 
 Para remover apenas os recursos identificados como pertencentes ao Ralph:
@@ -305,6 +305,52 @@ rejeitados sem sobrescrever silenciosamente o trabalho de um agente.
 
 Fases continuam sequenciais. O paralelismo ocorre apenas entre tasks
 independentes da fase atual.
+
+## Contexto de repositório pré-carregado
+
+Cada task roda em um processo novo, sem sessão, então o agente redescobre o
+repositório do zero. Medido em uma execução real: o prompt entregue pelo RB
+Ralph tinha 3,7 KB, e o agente gastava de 445k a 1520k tokens de entrada por
+task, com 82% dos seus comandos de shell sendo redescoberta — listar arquivos,
+buscar módulos e reler o próprio plano que o prompt já continha em extrato. O
+gerente fazia o mesmo, gastando 194k tokens de entrada relendo uma árvore que o
+RB Ralph já havia diferenciado.
+
+O RB Ralph já sabe tudo isso. A task declara seu `Scope`, a fase declara seu
+`Context`, e o snapshot de evidências cataloga a árvore e o que as tasks
+anteriores mudaram. Esse estado passa a ser entregue ao executor e ao gerente em
+vez de caçado:
+
+- o conteúdo atual dos arquivos que a task declara em `Scope`, ou um aviso
+  nomeando os caminhos de escopo que ainda não existem;
+- os caminhos que tasks anteriores da mesma fase já mudaram;
+- a lista de arquivos do projeto, vinda do snapshot do próprio orquestrador;
+- os documentos de `Context` da fase;
+- para o gerente, o conteúdo atual dos caminhos alterados, código primeiro,
+  sem lockfiles.
+
+Isso não é autoridade nova. É o estado atual do repositório, que a ordem de
+autoridade do executor já classifica em segundo lugar, entregue em vez de
+procurado. Cada seção respeita um orçamento de bytes declarado e toda omissão é
+declarada, então uma seção truncada nunca se lê como completa.
+
+```bash
+--no-agent-context           # desliga; vem ligado por padrão
+--agent-context-bytes <n>    # orçamento da seção do executor (padrão 49152)
+```
+
+`RB_RALPH_AGENT_CONTEXT=0`, `RB_RALPH_AGENT_CONTEXT_BYTES` e
+`RB_RALPH_MANAGER_CONTEXT_BYTES` definem os mesmos valores pelo ambiente.
+
+## Atividade das chamadas
+
+Totais de token escondem o formato de uma chamada. Uma task observada reportou
+1,52M tokens de entrada contra vizinhas em ~500k, e só o log bruto mostrou o
+porquê: 34 comandos de shell em vez de ~20. Cada chamada de provider passa a
+registrar suas contagens de comandos, edições e mensagens no diretório
+`activity/` da execução, para distinguir uma task grande de um agente preso em
+redescoberta. Um stream de provider que o leitor não reconhece é reportado como
+`unmeasured`, nunca como zero.
 
 ## Dashboard
 
