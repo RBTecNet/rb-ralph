@@ -99,6 +99,18 @@ escape="$(node "$HELPER" --mode manager --root "$PROJECT" --changes <(printf '{"
 if [ -z "$escape" ]; then printf 'PASS a path escaping the project is refused\n'
 else printf 'FAIL escaping path must never be read\n'; failures=$((failures + 1)); fi
 
+# The installer copies a fixed list, so a new helper is silently left out and the
+# launcher only fails later, at the call site. This caught exactly that.
+for helper in "$ROOT"/lib/*.cjs; do
+  name="$(basename "$helper")"
+  if grep -q "lib/$name" "$ROOT/install.sh"; then
+    printf 'PASS install.sh installs %s\n' "$name"
+  else
+    printf 'FAIL install.sh does not install %s\n' "$name"
+    failures=$((failures + 1))
+  fi
+done
+
 printf '\n'
 if [ "$failures" -eq 0 ]; then
   printf 'test-agent-context: all checks passed\n'

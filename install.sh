@@ -133,6 +133,8 @@ install -m 0755 "$SOURCE_ROOT/lib/manager-audit.cjs" "$INSTALL_HOME/lib/manager-
 install -m 0755 "$SOURCE_ROOT/lib/operational-verifier.cjs" "$INSTALL_HOME/lib/operational-verifier.cjs"
 install -m 0755 "$SOURCE_ROOT/lib/fragment-discovery.cjs" "$INSTALL_HOME/lib/fragment-discovery.cjs"
 install -m 0755 "$SOURCE_ROOT/lib/profiles.cjs" "$INSTALL_HOME/lib/profiles.cjs"
+install -m 0755 "$SOURCE_ROOT/lib/agent-context.cjs" "$INSTALL_HOME/lib/agent-context.cjs"
+install -m 0755 "$SOURCE_ROOT/lib/agent-activity.cjs" "$INSTALL_HOME/lib/agent-activity.cjs"
 install -m 0644 "$SOURCE_ROOT/pricing.example.json" "$INSTALL_HOME/pricing.example.json"
 install -m 0644 "$SOURCE_ROOT/README.md" "$INSTALL_HOME/README.md"
 install -m 0644 "$SOURCE_ROOT/VERSION" "$INSTALL_HOME/VERSION"
