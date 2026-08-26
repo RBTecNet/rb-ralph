@@ -1,5 +1,7 @@
 # RB Ralph
 
+[English](README.md) · [Português do Brasil](README.pt-BR.md)
+
 RB Ralph is the optional execution consumer for RB Harness artifacts. It is a
 provider-neutral Bash run manager: implementation agents change code, a
 technical-manager LLM reviews evidence, and deterministic gates retain final
@@ -17,6 +19,11 @@ It additionally understands the optional, additive `rb-operational/v1`
 contract for clean-room product acceptance.
 
 ## Installation
+
+The runtime supports Bash 3.2 or newer, including the Bash version bundled
+with macOS. It deliberately avoids Bash 4-only features such as associative
+arrays. Node.js, Git, and the CLIs selected as agent or manager providers must
+also be available on the machine.
 
 ### Current user, without sudo
 
@@ -61,9 +68,9 @@ No auxiliary resource is written directly to `/bin`. The layout is:
 │   └── rb-ralph-watch -> ../libexec/rb-ralph/bin/rb-ralph-watch
 └── libexec/rb-ralph/
     ├── bin/{rb-ralph,rb-ralph-watch}
-    ├── adapters/{adapter-utils,codex,claude,opencode}.sh
+    ├── adapters/{adapter-utils,api,codex,claude,opencode}.sh
     ├── core/rb-harness.cjs
-    ├── lib/{evidence,control-plane,process-supervisor,operational-verifier,provider-telemetry,usage-summary,dashboard}.cjs
+    ├── lib/{evidence,evidence-index,validation-cache,manager-audit,control-plane,process-supervisor,operational-verifier,fragment-discovery,profiles,provider-telemetry,usage-summary,dashboard}.cjs
     ├── VERSION
     ├── pricing.example.json
     └── README.md
@@ -79,6 +86,25 @@ To package a different compatible RB Harness CLI:
 ./rb-ralph.sh --install --prefix "$HOME/.local" \
   --core-cli /path/to/rb-harness
 ```
+
+The bundled core is synchronized with RB Harness 0.3.11. Besides Ralph's
+manifest and execution-plan commands, that core carries the additive
+`rb-headless-interview/v1` validator and durable hosted-interview boundary.
+Ralph itself still executes only ready `rb-execution/v1` plans; it does not
+turn an unfinished interview into executable authority.
+
+Harness generation providers may emit up to 128 MiB while interview and audit
+providers remain limited to 32 MiB. Limits are measured as UTF-8 bytes, and a
+timeout or overflow recursively terminates nested provider processes so a
+sandboxed tool cannot remain orphaned after its parent exits.
+
+Manifest synchronization gives long or normalization-colliding artifact paths
+stable hash-suffixed IDs. A completed Harness writer generation is checkpointed
+before deterministic validation, so `rb-harness resume` can continue from the
+staged tree without spending another writer call after a manifest gate fails.
+An audit can block for developer input only when it carries a concrete
+question and two to five incompatible product alternatives. Decisionless
+legacy blocks resume from their preserved staged draft as technical repairs.
 
 ### Uninstallation
 
@@ -119,12 +145,118 @@ Confirm the exact source or installed build at any time with:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.5.1
+# RB Ralph 0.10.0
 ```
 
 The installer prints and copies the same `VERSION` marker, so a source upgrade
 and the globally installed launcher can be compared without relying on file
 timestamps.
+
+### Interactive wizard and reusable profiles
+
+Run `rb-ralph` without arguments in an interactive terminal to open the
+execution wizard. `rb-ralph --wizard` is the explicit equivalent. The wizard:
+
+1. selects the project and artifact/fragment directory;
+2. discovers only ready, valid `rb-execution/v1` plans;
+3. selects a built-in or saved execution profile;
+4. asks for executor and manager provider, model, and effort when absent;
+5. optionally configures audit, isolation, parallelism, permission, dashboard,
+   and first-output timeouts;
+6. prints the exact escaped command before executing it.
+
+It can print or cancel without starting a provider, restart the interview, or
+save the reusable portion as a named profile before execution. The command is
+built as a Bash argument array and executed directly: user answers and profile
+values are never passed through `eval`.
+
+The immutable built-in profiles are:
+
+| Profile | Execution policy |
+| --- | --- |
+| `balanced` | fresh call per task, exhaustive manager, final audit, dashboard, YOLO |
+| `fast` | fresh call per phase, exhaustive manager, final audit, dashboard, YOLO |
+| `strict` | fresh call per task, exhaustive manager, final audit, dashboard, protected |
+
+Built-ins deliberately omit provider and model choices. The wizard asks for
+them; a custom profile can retain providers, models, efforts, and saved
+credential references. Profiles never retain project paths, plan IDs, Memory
+URLs or token variable values, operational-contract paths, pricing files,
+API keys, OAuth tokens, or other secret material.
+
+Saved profiles use the versioned `rb-ralph-profiles/v1` JSON contract at
+`${XDG_CONFIG_HOME:-$HOME/.config}/rb-ralph/profiles.json`. Ralph creates the
+directory with mode `0700`, writes atomically, and keeps the file at mode
+`0600`. It rejects symlinks, unknown fields, malformed values, built-in name
+shadowing, and unsupported CLI options. Set `RB_RALPH_PROFILES_FILE` to choose
+another file, for example in isolated CI tests.
+
+Manage and inspect profiles without starting a provider:
+
+```bash
+rb-ralph profile list
+rb-ralph profile show my-team
+rb-ralph profile path
+rb-ralph profile delete my-team
+```
+
+Use a profile in a normal non-interactive command:
+
+```bash
+rb-ralph --profile my-team \
+  --project /path/to/project \
+  --artifacts-dir .spec \
+  --plan <artifact-id>
+
+# Explicit command-line choices override the stored strategy.
+rb-ralph --profile my-team --project . --plan <artifact-id> \
+  --agent-model gpt-5.4-mini --manager-model gpt-5.6-sol \
+  --manager-effort xhigh --no-dashboard
+```
+
+Precedence is runtime defaults and environment, then profile values, then
+explicit command-line flags. In particular, an explicit shared `--provider`,
+`--model`, or `--effort` replaces both role-specific values from a profile.
+Invoking `rb-ralph` without arguments while stdin or stdout is redirected does
+not wait for input: it prints help and exits with an actionable error. Use a
+complete command in scripts and CI.
+
+### Alternate artifact and fragment directories
+
+Ralph looks under `.rb` by default. Use `--artifacts-dir <dir>` when another
+harness writes its planning artifacts elsewhere; `--fragments-dir` is an exact
+alias for users who call those inputs fragments:
+
+```bash
+rb-ralph --project /path/to/project --artifacts-dir .spec --list
+rb-ralph --project /path/to/project --fragments-dir .spec \
+  --plan spec-features-example-phases-imported-execution --dry-run
+```
+
+`RB_RALPH_ARTIFACTS_DIR` is the environment equivalent. Relative directories
+are resolved from `--project`, must remain inside that project, and are treated
+as read-only planning input. Ralph never renames the directory. Its own locks,
+logs, prompts, and durable execution evidence remain isolated under
+`.rb/runs/`, regardless of the selected input directory.
+
+When the selected directory contains `rb-manifest.json`, discovery remains
+fully manifest-driven and supports any producer of valid `rb-manifest/v1` and
+`rb-execution/v1` artifacts. Without a manifest, Ralph currently has a
+fail-closed compatibility importer for the public Beer and Code Harness
+contracts:
+
+- `.spec/init/project-phases.md`, using `- [ ] **Task:** ...`;
+- `.spec/features/<slug>/PHASES.md`, using `- [ ] TNN — ...`.
+
+The importer scans only the selected directory, recognizes exact numbered
+phase and task shapes, preserves the original file and its hash, and creates a
+temporary canonical `rb-execution/v1` view. The shared RB Harness parser then
+validates that view before any provider starts. Unsupported, malformed, or
+ambiguous documents fail with an actionable preflight error instead of being
+guessed. Imported tasks are sequential by default (`Parallel safe: false`) so
+Ralph cannot infer cross-agent write independence that the source harness did
+not declare. RB Memory integration still requires a manifest with a stable
+project identity.
 
 ## Live terminal dashboard
 
@@ -134,18 +266,33 @@ capybara watching over less-calm agents. Narrow or short terminals
 automatically use the compact one-line brand so gates and evidence retain
 priority over decoration.
 
+Every interactive invocation opens with a short animated splash: the large RB
+Ralph wordmark and Ralph the capybara, cycling green -> purple -> orange for
+about 1.8 seconds. It is drawn on the terminal's alternate screen buffer, so it
+leaves no trace in the scrollback and the run starts on a clean screen. The
+splash is purely cosmetic and never changes execution state; the brand shown
+inside the run itself stays static.
+
+It is skipped automatically whenever it would be noise: non-interactive output
+(pipes, redirects, CI), `--list`, `--dry-run`, `--help`, `--version`,
+`TERM=dumb`, and terminals smaller than 34x16.
+
+```bash
+rb-ralph --splash                             # play it on its own and exit
+rb-ralph --project . --no-splash              # skip it for this invocation
+RB_RALPH_SPLASH=0 rb-ralph --project .        # disable it entirely
+RB_RALPH_SPLASH_MS=800 rb-ralph --project .   # make it shorter
+```
+
+`--splash` is the explicit request, so it plays even when `RB_RALPH_SPLASH=0`
+is set in the environment.
+
 Start a run with its embedded TUI:
 
 ```bash
-rb-ralph --project . --provider codex --splash --dashboard
+rb-ralph --project . --provider codex --dashboard
 # --tui is an equivalent alias
 ```
-
-`--splash` plays the animated RB Ralph wordmark and capybara before execution.
-It composes correctly with `--dashboard`; `RB_RALPH_SPLASH_MS` may override its
-default 1800 ms duration. The splash is opt-in, stays silent outside a capable
-interactive terminal, and never changes execution state. Use `--no-splash` to
-override `RB_RALPH_SPLASH=1` for one invocation.
 
 The runner streams model output into its normal evidence logs while the
 dashboard owns the terminal screen. A fixed-height `LOG RECENTE` box below the
@@ -162,6 +309,14 @@ close it. `Ctrl-C` still interrupts an active runner and restores the terminal.
 Observable state is written atomically for every execution, even without
 `--dashboard`. A second terminal can therefore attach before, during, or after
 a run:
+
+While a provider call is active, an orchestrator-owned metadata side channel
+reports process state, elapsed time, first-byte latency, observed byte count,
+CPU/I/O activity age, and timeout countdowns. It never contains provider text.
+The dashboard therefore distinguishes a started process, active-but-silent
+inference, idle silence, first output, and timeout instead of claiming only
+that it is waiting for an unknown provider event. Canonical raw role logs are
+still published atomically when the call ends.
 
 ```bash
 rb-ralph-watch --project /path/to/project
@@ -220,6 +375,7 @@ The optional custom-adapter record is a JSON object with this stable shape:
   "schema": "rb-ralph-usage/v1",
   "provider": "provider-name",
   "model": "exact-model-id",
+  "effort": "provider-effort-token-or-default",
   "role": "agent",
   "phaseId": "P01",
   "taskId": null,
@@ -291,7 +447,9 @@ Codex caches or from the monorepo's internal layout participates in discovery.
 
 ## Current capabilities
 
-- Discovers ready plans through `rb-manifest/v1`; it never guesses paths.
+- Discovers ready plans through `rb-manifest/v1` in `.rb` or an explicitly
+  selected directory; manifest-less input is accepted only through a strict,
+  named compatibility importer.
 - Rejects stale hashes, invalid trees, unsupported contracts, and malformed
   phase/task documents before starting a provider.
 - Selects a plan by artifact ID or manifest path.
@@ -302,8 +460,11 @@ Codex caches or from the monorepo's internal layout participates in discovery.
 - Uses provider-neutral executable adapters that read prompts from stdin.
 - Includes built-in Codex and Claude Code adapters, including mixed-provider
   runs.
-- Runs every backtick-delimited validation command in the phase and prevents
-  manager approval from overriding a deterministic failure.
+- Gives declared deterministic validations one authority: Ralph. Identical
+  commands are deduplicated, successful phase evidence is cached, and retries
+  rerun only commands whose task scopes intersect the actual changed paths.
+  Missing, ambiguous, or incomplete scope evidence falls back to every unique
+  phase command. A manager cannot override a deterministic failure.
 - Passes prior manager feedback and validation logs into retry prompts.
 - Runs independent pending tasks concurrently when every selected task is
   marked parallel-safe and no selected task depends on another.
@@ -329,12 +490,29 @@ Codex caches or from the monorepo's internal layout participates in discovery.
   orchestrator artifacts are integrity-checked so an executor cannot silently
   rewrite prompts, logs, events, validations, or prior evidence.
 - Resumes phases already accepted by the manager for the same plan hash.
+- Preserves artifacts from an interrupted provider call and advances to a new
+  durable attempt number on resume, even when the interruption happened before
+  an event row was recorded. Reusing a canonical prompt/log name can therefore
+  never masquerade as executor control-plane tampering.
+- Records the owning Ralph PID in each run lock. On startup, a conflicting
+  invocation checks the owner, live dashboard, provider status files, and
+  run-specific processes. A lock with any live process remains exclusive; an
+  orphaned lock left by a power loss is quarantined atomically, removed, and
+  resumed automatically without deleting durable run evidence.
 - Supports progress-aware implementation retries, strategy recovery, a hard
   per-invocation cap, and resumable circuit-breaker pauses.
-- Persists a cumulative finding ledger. Every manager RETRY remains open across
-  later attempts until a COMPLETE decision resolves it against the current
-  changed-path and validation fingerprint; newer feedback never erases older
-  findings.
+- Persists a cumulative, evidence-bound finding ledger. Each exhaustive RETRY
+  batch is the complete current snapshot: repeated findings stay open with
+  their latest evidence, findings absent after a changed canonical fingerprint
+  close individually, and a later regression creates a new auditable opening.
+  Legacy ledgers are migrated and replayed from preserved manager audits when a
+  run resumes, so an upgrade does not resend already-resolved work.
+- Fingerprints the manager's complete finding-key batch and treats an unchanged
+  root-cause batch as stalled even when the executor changed files or the
+  manager supplied a new reproduction. The manager still performs its complete
+  independent audit, but equivalent counterexamples must remain grouped under
+  one stable component/invariant finding so regex or vocabulary oscillation
+  cannot masquerade as progress.
 - Detects built-in-provider turns that exit successfully with no workspace
   delta and no completed final-response marker. Those incomplete turns receive
   bounded executor-only retries and never spend a manager review or logical
@@ -453,6 +631,9 @@ following environment is available:
 - `RB_RALPH_AGENT_LOG` for the manager role; this is the canonical executor
   output published after the executor process exits.
 - `RB_RALPH_VALIDATION_LOG` for the manager role.
+- `RB_RALPH_EVIDENCE_INDEX` for the manager role: bounded hashes, changed
+  paths, status markers, and validation command/exit/duration rows. Full raw
+  logs remain available by canonical path for targeted inspection.
 - `RB_RALPH_CHANGED_PATHS_FILE` for the manager role.
 - `RB_RALPH_AGENT_EXIT_CODE` for the manager role.
 - `RB_RALPH_TELEMETRY_FILE`: per-call usage record the adapter may populate.
@@ -460,8 +641,8 @@ following environment is available:
   operational contract was selected, otherwise empty.
 
 `RB_RALPH_PROJECT_ROOT` is the primary project root in shared mode and the
-agent's detached task worktree in isolated mode. `RB_RALPH_TASK_ID` is set only
-for a task-scoped parallel agent.
+agent's detached task worktree in isolated mode. `RB_RALPH_TASK_ID` is set for
+every task-scoped agent, whether sequential or parallel.
 
 A custom manager adapter must provide its model with read access to
 `RB_RALPH_PROJECT_ROOT` and the evidence paths above. The manager prompt
@@ -471,13 +652,46 @@ filesystem access must therefore implement its own bounded and redacted
 evidence transport before it can satisfy this contract; otherwise it must
 reject manager use clearly.
 
-The agent may implement the phase. The manager must inspect without repairing
-and return:
+In the default `--validation-mode run`, the manager must not execute or repeat
+a command already represented in `RB_RALPH_VALIDATION_LOG` or
+`RB_RALPH_EVIDENCE_INDEX`. Ralph owns those command results. The manager audits
+changed source, contracts, acceptance coverage, and evidence provenance; a
+genuinely missing check is returned as one `UNPROVEN` finding for the next
+executor/orchestrator cycle. The runtime-only `RBF` phase remains intentionally
+independent and repeats one real consumer workflow in a clean environment.
+
+The agent may implement its task. By default (`--manager-audit exhaustive`),
+the manager must inspect without repairing, finish the entire required matrix,
+return all currently observable findings as one batch, and only then decide:
 
 ```text
-RB_RALPH_DECISION: COMPLETE
-RB_RALPH_REASON: Every criterion is covered and focused validations pass.
+RB_RALPH_AUDIT_STATUS: COMPLETE
+RB_RALPH_CRITERION: T001 | PASS | current source and canonical validation evidence
+RB_RALPH_CRITERION: AC-T001-01 | FAIL | consumer probe contradicts the criterion
+RB_RALPH_FINDING: AC-T001-01 | public consumer boundary | expected value | observed value | command/log provenance
+RB_RALPH_DECISION: RETRY
+RB_RALPH_REASON: Complete finding batch requires one repair cycle.
 ```
+
+Every task and acceptance-criterion ID must appear exactly once with `PASS`,
+`FAIL`, `UNPROVEN`, `HUMAN_PENDING`, or `NOT_APPLICABLE`. Missing rows trigger a
+manager-only completion retry over the same executor evidence. `RETRY` requires
+a structured finding for every failed or unproven row. `COMPLETE` is accepted
+only when every row passes or is demonstrably not applicable. Every RETRY must
+repeat every still-observable structured finding. Omission closes an older
+finding only when the canonical evidence fingerprint changed; unchanged
+evidence cannot silently reinterpret a failure as success. Finding identities
+are derived from criteria, boundary, and expected behavior, while the latest
+observed failure and evidence remain current in the executor prompt. The
+  explicit compatibility mode `--manager-audit legacy` accepts the older
+  two-line response.
+
+If an orchestrator-owned gate converts a manager `COMPLETE` into `RETRY` (for
+example, a nonzero executor exit or deterministic validation failure), Ralph
+records the orchestrator reason as a fallback finding. It does not feed a
+finding-free `COMPLETE` report into the structured RETRY reconciler. Resume
+replay follows the effective append-only event outcome as well, so the raw
+manager decision cannot close findings from an orchestrator-rejected attempt.
 
 `RETRY` and `BLOCKED` are the other valid decisions. Adapters own CLI-specific
 arguments, models, permissions, authentication, and output normalization, so
@@ -505,6 +719,7 @@ manager option is given explicitly:
 | `--agent-provider codex` | Codex | Codex, inherited |
 | `--agent-provider claude --manager-provider codex` | Claude | Codex, explicit |
 | `--agent-provider opencode --manager-provider claude` | OpenCode | Claude, explicit |
+| `--agent-provider deepseek --manager-provider openai` | DeepSeek API | OpenAI API, explicit |
 | `--agent-cmd /path/agent` | `/path/agent` | `/path/agent`, inherited |
 | `--agent-cmd /path/agent --manager-cmd /path/manager` | `/path/agent` | `/path/manager`, explicit |
 
@@ -517,6 +732,75 @@ primary role.
 It does not mean the same conversation: executor and manager are separate,
 ephemeral invocations with no shared session. An explicit manager model still
 takes precedence over inherited model configuration.
+
+### Direct API providers and shared login
+
+Ralph can call these providers without routing them through OpenCode or another
+model CLI:
+
+| Provider | Authentication available through `rb-ralph --login` |
+| --- | --- |
+| `openai` | API key |
+| `anthropic` | API key |
+| `gemini` | API key or Google Application Default Credentials |
+| `deepseek` | API key |
+| `minimax` | API key |
+| `openrouter` | API key or browser OAuth with PKCE |
+
+Run the guided login once, then reference the saved credential by its label or
+ID. The same encrypted per-user vault is shared with RB Harness:
+
+```bash
+rb-ralph --login
+rb-harness auth list
+
+rb-ralph provider list
+rb-ralph provider list --json
+
+# Interactive: choose a configured API/credential, model, effort and timeout
+rb-ralph provider test
+
+rb-ralph provider test --provider deepseek \
+  --model deepseek-v4-pro --credential pessoal --timeout 60
+
+rb-ralph --project . --plan <artifact-id> \
+  --agent-provider deepseek --agent-model deepseek-v4-pro \
+  --agent-credential pessoal \
+  --manager-provider openai --manager-model <api-model-id> \
+  --manager-credential auditor \
+  --agent-effort high --manager-effort high \
+  --yolo --dashboard
+```
+
+`provider list` and `provider test` delegate to Ralph's packaged Harness core,
+so both executables read the same provider registry and credential vault.
+The test performs one bounded `PING`/`PONG` API request only: it does not create
+a Ralph run, discover a plan, invoke an executor/manager, or modify the project.
+Use `--json` for the safe versioned diagnostic response.
+With provider or model omitted in an interactive terminal, Ralph exposes the
+same guided test wizard as Harness. It lists only configured APIs, selects safe
+credential metadata, asks for model, optional effort and timeout, prints an
+equivalent `rb-ralph` command, and confirms before sending the request.
+Non-interactive callers must continue supplying provider and model explicitly.
+Credential selection accepts the full ID printed by `provider list`, its
+original label, or the normalized slug after the provider prefix.
+
+Direct providers require an explicit provider model ID. Credential references
+may be saved in profiles, but secret values never may. Executor and manager
+remain fresh, independent calls; the manager is always limited to read tools,
+while the executor can edit the workspace and run bounded commands.
+
+The direct API executor currently requires `--yolo`: Ralph cannot truthfully
+provide an operating-system sandbox around its native local tools. Use the
+existing `codex`, `claude`, or another sandbox-capable CLI adapter when
+`--protected` execution is required. This restriction does not weaken the
+manager, whose direct API tools remain read-only in both modes.
+
+OpenAI and Anthropic do not expose their consumer CLI/browser sessions as a
+generic third-party OAuth login, so their direct API modes use API keys. The
+existing `codex` and `claude` CLI providers continue managing their own login
+sessions. Gemini OAuth uses the installed `gcloud` Application Default
+Credentials flow; OpenRouter implements its documented localhost PKCE flow.
 
 ### Model selection by role
 
@@ -556,6 +840,59 @@ compatible. Custom adapters receive the effective model for the current call in
 `RB_RALPH_MODEL`, plus both resolved role values in `RB_RALPH_AGENT_MODEL` and
 `RB_RALPH_MANAGER_MODEL`.
 
+### Reasoning effort by role
+
+Effort selection is also provider-neutral and follows the same precedence and
+inheritance rules as model selection:
+
+```bash
+# One effort for both independent calls
+rb-ralph --project . --provider codex --effort high
+
+# GPT-5.4 Mini implements with medium effort; Sol audits with xhigh effort
+rb-ralph --project /path/to/project --plan <artifact-id> --provider codex \
+  --agent-model gpt-5.4-mini --agent-effort medium \
+  --manager-model gpt-5.6-sol --manager-effort xhigh \
+  --execution-unit task --manager-audit exhaustive --dashboard
+
+# Claude uses its native --effort option underneath
+rb-ralph --project . --provider claude --model sonnet \
+  --agent-effort low --manager-effort high
+
+# OpenCode translates effort to the selected model's --variant
+rb-ralph --project . --provider opencode \
+  --model opencode-go/deepseek-v4-pro \
+  --agent-effort medium --manager-effort high
+
+# Mixed providers keep independent, provider-supported effort tokens
+rb-ralph --project . \
+  --agent-provider opencode --agent-model opencode/mimo-v2.5-free --agent-effort high \
+  --manager-provider codex --manager-model gpt-5.6-sol --manager-effort xhigh
+
+# Environment variables are equivalent to the CLI flags
+RB_RALPH_AGENT_EFFORT=medium RB_RALPH_MANAGER_EFFORT=xhigh \
+  rb-ralph --project . --provider codex \
+  --agent-model gpt-5.4-mini --manager-model gpt-5.6-sol
+```
+
+`--agent-effort` and `--manager-effort` override `--effort` regardless of
+argument order. If only `--agent-effort` is supplied and the manager uses the
+same inherited adapter, the manager inherits it. An explicitly different
+provider does not inherit the executor effort. Ralph intentionally accepts an
+opaque provider-supported token instead of imposing a false common enum.
+
+The environment equivalents are `RB_RALPH_EFFORT`,
+`RB_RALPH_AGENT_EFFORT`, and `RB_RALPH_MANAGER_EFFORT`. Existing
+provider-specific forms (`RB_RALPH_CODEX_*_EFFORT`,
+`RB_RALPH_CLAUDE_*_EFFORT`, and `RB_RALPH_OPENCODE_*_EFFORT`) are also
+supported. Custom adapters receive the current effective value in
+`RB_RALPH_EFFORT` and both resolved role values in the role-specific variables.
+
+Built-in adapters translate the selected token as follows: Codex receives
+`model_reasoning_effort`, Claude receives `--effort`, and OpenCode receives
+`--variant`. If the installed CLI or selected model rejects the token, the
+provider call fails visibly; Ralph never silently drops the requested effort.
+
 Use Codex for both roles from a source checkout:
 
 ```bash
@@ -591,6 +928,109 @@ the combined patch to the primary tree when all checks succeed. Changes under
 manager. Patches that touch the same path are rejected even when their hunks
 would merge cleanly. Any overlap or conflict leaves the primary tree unchanged
 and stores individual patches under the active run's `patches/` directory.
+
+## Manager review scope
+
+`--manager-review` chooses how deeply the technical manager judges a phase.
+
+| Mode | Question it answers |
+| --- | --- |
+| `delivery` (default) | Did the executor deliver what this fragment asked for? |
+| `code` | That, plus: is the changed source itself sound? |
+
+In `delivery`, a criterion whose observable outcome is evidenced by the current
+source, the validation rows, or the evidence index is `PASS`. The manager does
+not withhold acceptance for style, naming, structure, test depth, or any concern
+the fragment did not ask for, and does not open findings for defects outside the
+declared criteria. `FAIL` and `UNPROVEN` belong to a criterion the executor did
+not deliver or did not evidence — not to work delivered in a way the reviewer
+would have done differently.
+
+In `code`, the manager judges delivery first and then audits the changed source:
+incorrect logic at a changed boundary, a missing error path, an unhandled input
+class, a broken invariant, or a regression in behavior the phase was meant to
+preserve. A criterion technically satisfied by defective code is not `PASS`.
+
+```bash
+# the default: accept a phase once the fragment was delivered
+bin/rb-ralph --project . --plan feature-example-execution --provider codex
+
+# opt in to the stricter review
+bin/rb-ralph --project . --plan feature-example-execution --provider codex \
+  --manager-review code
+```
+
+`RB_RALPH_MANAGER_REVIEW` sets the same value, and a profile may declare
+`execution.managerReview`. The built-in `strict` profile uses `code`; `balanced`
+and `fast` use `delivery`.
+
+**The scope narrows judgment only.** It never approves past a deterministic
+gate: a non-zero executor exit, a failed validation command, or a finding
+reopened on unchanged evidence still turns `COMPLETE` into `RETRY`, and that
+conversion is made by the orchestrator in code, not by the manager in a prompt.
+The final operational acceptance phase (`RBF`) also always reviews at full
+depth — it exists to exercise the real consumer boundary, which is a different
+question from whether a fragment was delivered.
+
+## Pre-loaded repository context
+
+Every task runs in a fresh process with no session, so the agent rediscovers the
+repository from scratch. Measured on a real run: the prompt RB Ralph handed over
+was 3.7 KB, and the agent then spent 445k-1520k input tokens per task, with 82%
+of its shell commands being rediscovery — listing files, grepping for modules,
+and re-reading the very plan the prompt already carried in extract form. The
+manager did the same, spending 194k input tokens re-reading a tree RB Ralph had
+already diffed.
+
+RB Ralph already knows all of it. The task declares its `Scope`, the phase
+declares its `Context`, and the evidence snapshot catalogues the tree and what
+earlier tasks changed. That state is now handed to the executor and the manager
+instead of being hunted:
+
+- the current content of the files the task declares in `Scope`, or a note
+  naming the scope paths that do not exist yet;
+- the paths earlier tasks in the same phase already changed;
+- the project file list from the orchestrator's own snapshot;
+- the phase's `Context` documents;
+- for the manager, the current content of the changed paths, source first,
+  lockfiles left out.
+
+This is not new authority. It is the current repository state, which the
+executor's authority order already ranks second, delivered rather than searched
+for. Every section is bounded by a declared byte budget and every omission is
+stated, so a truncated section can never read as a complete one.
+
+```bash
+--no-agent-context           # turn it off; it is on by default
+--agent-context-bytes <n>    # byte budget for the executor section (default 49152)
+```
+
+`RB_RALPH_AGENT_CONTEXT=0`, `RB_RALPH_AGENT_CONTEXT_BYTES`, and
+`RB_RALPH_MANAGER_CONTEXT_BYTES` set the same values from the environment.
+
+## Panel focus
+
+The task table follows the unit being worked on. When it does not fit the
+terminal, the window centres on the running task, keeps its phase heading in
+view so a visible task always says where it belongs, and reports what is hidden
+on each side (`↑ 14 acima · ↓ 10 abaixo`) rather than ending the list silently.
+
+This used to fail in a way that was easy to misread as a stall: the anchor
+searched the *rendered* rows for the current phase ID, but every row starts with
+a coloured box border, so the match never succeeded and the window pinned itself
+to the top of the table. A long phase therefore showed only its finished tasks
+while the one actually executing sat below the cut. Rows are now tagged as they
+are built, so the focus never depends on parsing text meant for a screen.
+
+## Call activity
+
+Token totals hide the shape of a call. One observed task reported 1.52M input
+tokens against neighbours at ~500k, and only its raw log showed why: 34 shell
+commands instead of ~20. Each provider call now records its command, edit, and
+message counts under the run's `activity/` directory, so a large task can be
+told apart from an agent looping on rediscovery. A provider stream this cannot
+read is reported as `unmeasured`, never as zero.
+
 
 Use Claude Code for both roles:
 
@@ -657,6 +1097,9 @@ and `read-only` for the manager. Configure models with
 `RB_RALPH_CODEX_MODEL`. When only the agent model is set and the manager is
 inherited, Ralph uses that model for both roles. Setting the manager model keeps
 an explicit override.
+Configure Codex effort with the provider-neutral flags above or with
+`RB_RALPH_CODEX_AGENT_EFFORT`, `RB_RALPH_CODEX_MANAGER_EFFORT`, or the shared
+`RB_RALPH_CODEX_EFFORT`.
 
 In protected mode, Claude uses `acceptEdits` for the implementation agent and
 `plan` for the manager. Configure models with
@@ -664,6 +1107,8 @@ In protected mode, Claude uses `acceptEdits` for the implementation agent and
 `RB_RALPH_CLAUDE_MODEL`. Optional bounds are
 `RB_RALPH_CLAUDE_MAX_TURNS` and `RB_RALPH_CLAUDE_MAX_BUDGET_USD`.
 Claude model inheritance follows the same rule.
+Claude effort may likewise be configured with `RB_RALPH_CLAUDE_AGENT_EFFORT`,
+`RB_RALPH_CLAUDE_MANAGER_EFFORT`, or `RB_RALPH_CLAUDE_EFFORT`.
 
 `RB_RALPH_PERMISSION_MODE=protected` is the environment equivalent. Existing
 provider-specific variables such as `RB_RALPH_CODEX_AGENT_SANDBOX` and
@@ -676,21 +1121,30 @@ OpenCode, MiniMax, DeepSeek, and other CLIs connected through `--agent-cmd` or
 native CLI flags. A custom adapter that cannot enforce `protected` must exit
 with a clear error instead of silently running unrestricted.
 
-Authentication remains the responsibility of each installed CLI. The TUI
-always identifies new runs as `ACESSO YOLO` or `ACESSO PROTEGIDO`.
+Authentication for `codex`, `claude`, and `opencode` remains the responsibility
+of each installed CLI. Native API providers use the shared encrypted credential
+vault configured by `rb-ralph --login`; neither secrets nor tokens are passed
+in process arguments, profiles, run evidence, or dashboard state. The vault key
+is stored separately but under the same operating-system account, so this
+protects against accidental plaintext disclosure—not compromise of that user
+account. The TUI always identifies new runs as `ACESSO YOLO` or
+`ACESSO PROTEGIDO`.
 
 ## Context and continuity bounds
 
-Every provider invocation is a fresh, non-persistent call. Continuity comes
-from versioned artifacts and run evidence, not a provider chat session:
+Every provider invocation is a fresh, non-persistent call. The default
+`--execution-unit task` also gives each pending sequential task its own provider
+call in dependency order; `--execution-unit phase` is an explicit compatibility
+mode. Continuity comes from versioned artifacts and run evidence, not a provider
+chat session:
 
-- sequential agents receive only the validated current phase;
+- sequential agents receive only their validated task extract;
 - parallel agents receive only their task plus phase metadata;
-- retries receive the previous manager reason and paths to prior executor,
-  validation, and changed-path evidence;
-- managers receive the validated phase, executor exit status, changed source
-  paths, executor output, validation commands, each validation's output and
-  exit status, and pending manual validations;
+- retries receive normalized open findings, the previous failure, and paths to
+  prior executor, validation, and changed-path evidence;
+- managers receive the validated phase plus a bounded canonical evidence index;
+  raw executor and validation logs are opened only for a concrete unresolved
+  matrix row;
 - completed phases resume only when the selected plan SHA-256 is unchanged.
 
 Changed files are summarized by path and inspected by the manager in the
@@ -723,14 +1177,21 @@ The default recovery budget is deliberately finite:
   stdout/stderr plus descendant CPU and I/O progress, while other platforms use
   provider output. `--agent-timeout 3600` remains the one-hour wall-clock
   ceiling even when a process stays busy.
+- `--agent-first-output-timeout 300` bounds a process that remains CPU/I/O-active
+  without ever producing provider output. Such startup/inference failures retry
+  without spending a manager review or logical implementation attempt.
 - `--manager-idle-timeout 180` and `--manager-timeout 900` independently bound
   each technical-manager call. A manager timeout consumes only the manager
   retry budget and never repeats the executor.
+- `--manager-first-output-timeout 180` independently bounds the manager's first
+  byte while preserving executor evidence for a manager-only retry.
 
-Ralph treats a changed repository path plus a non-repeated manager reason as a
-progress signal. No changed path, or repeated feedback despite changes,
-increments the stall counter. This is intentionally a conservative operational
-heuristic rather than a claim that the change is correct; the manager and
+Ralph treats a changed repository path plus a changed canonical manager-finding
+batch as a progress signal. No changed path, or the same structured root cause
+despite changed prose and reproductions, increments the stall counter. Legacy
+manager responses without structured findings fall back to exact reason
+repetition. This is intentionally a conservative operational heuristic rather
+than a claim that the change is correct; the independent manager and
 deterministic gates retain correctness authority, while the absolute cap stops
 meaningless churn.
 
@@ -760,6 +1221,13 @@ number and injects that persisted manager feedback into the executor prompt.
 Already accepted phases remain skipped. With `--dashboard`, the final paused
 frame stays visible until `Enter`.
 
+Run locks use the same fail-closed recovery policy. Ralph never clears a lock
+while its owner, dashboard, or a recorded provider process is alive. If all
+recorded processes are dead, as after a reboot or hard power loss, the stale
+directory is moved out of the lock name before a new lock is acquired. This
+atomic handoff prevents two simultaneous resumptions from both entering the
+same run.
+
 For example, a longer but still bounded overnight run can use:
 
 ```bash
@@ -781,7 +1249,8 @@ hard cap is the final defense against superficial code churn.
 Each role timeout accepts `0` to disable that individual guard, although doing
 so is discouraged for unattended runs. Environment equivalents are
 `RB_RALPH_AGENT_TIMEOUT`, `RB_RALPH_AGENT_IDLE_TIMEOUT`,
-`RB_RALPH_MANAGER_TIMEOUT`, and `RB_RALPH_MANAGER_IDLE_TIMEOUT`.
+`RB_RALPH_AGENT_FIRST_OUTPUT_TIMEOUT`, `RB_RALPH_MANAGER_TIMEOUT`,
+`RB_RALPH_MANAGER_IDLE_TIMEOUT`, and `RB_RALPH_MANAGER_FIRST_OUTPUT_TIMEOUT`.
 
 The default maximum generated prompt size is 262144 bytes. Override it with
 `--max-prompt-bytes N`; `0` disables this guard. This is a deterministic input
@@ -845,9 +1314,15 @@ client configuration.
 
 ## Deterministic validation
 
-Default mode executes each validation command from `PHASES.md` after the
-implementation agent and captures output plus exit code. Each command has a
-900-second timeout when GNU `timeout` is available:
+Default mode executes the unique validation commands from `PHASES.md` after
+the implementation agent and captures output plus exit code. The first phase
+attempt establishes the complete command baseline. After a retry, Ralph maps
+the actual added/modified/deleted paths to the machine-bounded backtick paths
+in each task's `Scope`, invalidates affected tasks and their dependents, and
+reuses prior successful results for unaffected commands. If even one changed
+path is outside the declared scopes, a scope is not machine-bounded, or changed
+path collection is incomplete, every unique command runs again. Each executed
+command has a 900-second timeout when GNU `timeout` is available:
 
 ```bash
 bin/rb-ralph --project . --provider codex \
@@ -856,7 +1331,14 @@ bin/rb-ralph --project . --provider codex \
 
 Set `--validation-timeout 0` to disable the timeout. For a controlled adapter
 that owns all validation, use `--validation-mode manager`. This is less strict
-and is mainly useful for non-shell validation environments.
+and is mainly useful for non-shell validation environments; it deliberately
+disables Ralph's command authority, deduplication, and incremental cache.
+
+Several tasks may name the same broad command, such as `npm test`. Ralph runs
+that command once and records every owning task ID on the canonical evidence
+row. Cache entries live only inside the immutable plan-hash run directory, so a
+changed `PHASES.md` starts a new validation baseline instead of importing proof
+from an older contract.
 
 `manual:` is reserved for a precise inspection the technical manager can make
 from repository or produced evidence. `human:` means the evidence needs a
@@ -895,6 +1377,7 @@ Run the portable runner contract suite from the workspace root:
 ```bash
 bash tests/test-portability-and-contract.sh
 bash tests/test-execution-parallelism.sh
+bash tests/test-validation-cache.sh
 ```
 
 It covers real and symlink launchers, temporary installation, spaces in paths,
@@ -904,7 +1387,9 @@ telemetry, configured pricing, dashboard snapshots, progress beyond three
 attempts, no-progress interruption, isolated manager retries, hard caps, and
 durable resume feedback. The parallelism suite additionally proves bounded task
 concurrency, mandatory worktree isolation, primary-tree atomicity, ordinary Git
-conflict handling, and rejection of same-path sibling patches.
+conflict handling, and rejection of same-path sibling patches. The validation
+cache suite proves command deduplication, affected-scope invalidation, safe
+reuse, and conservative full fallback.
 
 ## Deliberate first-version limits
 
@@ -924,7 +1409,8 @@ conflict handling, and rejection of same-path sibling patches.
   allowances, or currency conversion; provider-reported cost remains preferred.
 - Provider limits are resumable within one running process; durable restart at
   a future wall-clock time is not yet a scheduler service.
-- Progress detection is based on changed paths and manager-reason repetition;
+- Progress detection is based on changed paths and the manager's canonical
+  structured root-cause batch, with exact-reason fallback for legacy responses;
   it does not semantically compare implementations. The hard cap remains the
   final guard against different-looking changes that do not converge.
 - RB Memory integration is optional; automated semantic consolidation and

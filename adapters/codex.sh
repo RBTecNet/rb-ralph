@@ -25,17 +25,24 @@ case "$ROLE" in
     SANDBOX="${RB_RALPH_CODEX_AGENT_SANDBOX:-workspace-write}"
     [ -z "${RB_RALPH_CODEX_AGENT_SANDBOX+x}" ] || SANDBOX_EXPLICIT=1
     MODEL="${RB_RALPH_MODEL:-${RB_RALPH_CODEX_AGENT_MODEL:-${RB_RALPH_CODEX_MODEL:-}}}"
+    EFFORT="${RB_RALPH_EFFORT:-${RB_RALPH_CODEX_AGENT_EFFORT:-${RB_RALPH_CODEX_EFFORT:-}}}"
     ;;
   manager)
     SANDBOX="${RB_RALPH_CODEX_MANAGER_SANDBOX:-read-only}"
     [ -z "${RB_RALPH_CODEX_MANAGER_SANDBOX+x}" ] || SANDBOX_EXPLICIT=1
     MODEL="${RB_RALPH_MODEL:-${RB_RALPH_CODEX_MANAGER_MODEL:-${RB_RALPH_CODEX_MODEL:-}}}"
+    EFFORT="${RB_RALPH_EFFORT:-${RB_RALPH_CODEX_MANAGER_EFFORT:-${RB_RALPH_CODEX_EFFORT:-}}}"
     ;;
   *)
     printf 'ERROR: RB_RALPH_ROLE must be agent or manager\n' >&2
     exit 1
     ;;
 esac
+
+[ -z "$EFFORT" ] || [[ "$EFFORT" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || {
+  printf 'ERROR: unsupported Codex effort token: %s\n' "$EFFORT" >&2
+  exit 1
+}
 
 case "$RB_PERMISSION_MODE" in
   yolo|protected) ;;
@@ -68,6 +75,9 @@ fi
 if [ -n "$MODEL" ]; then
   ARGS+=(--model "$MODEL")
 fi
+if [ -n "$EFFORT" ]; then
+  ARGS+=(-c "model_reasoning_effort=\"$EFFORT\"")
+fi
 if [ -n "${RB_RALPH_TELEMETRY_FILE:-}" ]; then
   ARGS+=(--json)
 fi
@@ -79,8 +89,8 @@ if [ -n "${RB_RALPH_TELEMETRY_FILE:-}" ]; then
     printf 'ERROR: RB Ralph telemetry helper not found: %s\n' "$TELEMETRY_HELPER" >&2
     exit 1
   }
-  rb_run_provider_telemetry "$TELEMETRY_HELPER" codex "$MODEL" \
+  rb_run_provider_telemetry "$TELEMETRY_HELPER" codex "$MODEL" "$EFFORT" \
     "$RB_RALPH_TELEMETRY_FILE" "$CODEX_BIN" "${ARGS[@]}"
 else
-  rb_run_provider "$CODEX_BIN" "${ARGS[@]}"
+  rb_run_provider codex "$CODEX_BIN" "${ARGS[@]}"
 fi

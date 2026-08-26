@@ -6,6 +6,7 @@ RALPH="$PACKAGE_ROOT/bin/rb-ralph"
 INSTALL_ENTRY="$PACKAGE_ROOT/rb-ralph.sh"
 CORE="$PACKAGE_ROOT/core/rb-harness.cjs"
 MINIMAL_FIXTURE="$PACKAGE_ROOT/tests/fixtures/execution/valid/minimal/PHASES.md"
+PACKAGE_VERSION="$(tr -d '\r\n' < "$PACKAGE_ROOT/VERSION")"
 TEMP_ROOT="$(mktemp -d)"
 trap 'rm -rf -- "$TEMP_ROOT"' EXIT
 
@@ -32,6 +33,13 @@ assert_not_contains() {
   local path="$1" unexpected="$2" message="$3"
   if grep -Fq -- "$unexpected" "$path"; then fail "$message"; fi
   ok "$message"
+}
+
+run_state_dir() {
+  local project="$1" plan hash
+  plan="$project/.rb/features/test/PHASES.md"
+  hash="$(node -e 'const fs=require("node:fs"),crypto=require("node:crypto"); process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex").slice(0,12))' "$plan")"
+  printf '%s/.rb/runs/init-minimal-execution-%s\n' "$project" "$hash"
 }
 
 assert_not_exists() {
@@ -75,6 +83,11 @@ export MOCK_STATE
 # Existing contract tests exercise P01 semantics in isolation. Dedicated tests
 # below opt into the new default final audit explicitly.
 export RB_RALPH_FINAL_AUDIT=0
+# Legacy fixtures below focus on their named control-plane behavior. Dedicated
+# regressions exercise the new default task boundary and exhaustive manager
+# matrix without requiring every historical mock to reproduce that protocol.
+export RB_RALPH_EXECUTION_UNIT=phase
+export RB_RALPH_MANAGER_AUDIT_MODE=legacy
 
 MOCK_DRIVER="$TEMP_ROOT/mock-driver"
 export MOCK_DRIVER
@@ -83,11 +96,12 @@ cat > "$MOCK_DRIVER" <<'MOCK'
 set -euo pipefail
 provider="${MOCK_PROVIDER:-custom}"
 cat > "$MOCK_STATE/${MOCK_RUN_TAG}-${provider}-${RB_RALPH_ROLE}.prompt"
-printf '%s|%s|agent_model=%s|manager_model=%s|args=%s|permission=%s|yolo=%s|model=%s|generic_agent_model=%s|generic_manager_model=%s\n' \
+printf '%s|%s|agent_model=%s|manager_model=%s|args=%s|permission=%s|yolo=%s|model=%s|generic_agent_model=%s|generic_manager_model=%s|effort=%s|generic_agent_effort=%s|generic_manager_effort=%s\n' \
   "$provider" "$RB_RALPH_ROLE" "${RB_RALPH_CODEX_AGENT_MODEL:-}" \
   "${RB_RALPH_CODEX_MANAGER_MODEL:-}" "$*" \
   "${RB_RALPH_PERMISSION_MODE:-missing}" "${RB_RALPH_YOLO:-missing}" \
   "${RB_RALPH_MODEL:-}" "${RB_RALPH_AGENT_MODEL:-}" "${RB_RALPH_MANAGER_MODEL:-}" \
+  "${RB_RALPH_EFFORT:-}" "${RB_RALPH_AGENT_EFFORT:-}" "${RB_RALPH_MANAGER_EFFORT:-}" \
   >> "$MOCK_STATE/roles.log"
 if [ "$RB_RALPH_ROLE" = "agent" ]; then
   mkdir -p src
@@ -137,6 +151,26 @@ run_role_project() {
     "$RALPH" --project "$project" --validation-mode manager --max-attempts 1 "$@"
 }
 
+# The macOS system shell is Bash 3.2. Keep every shipped runtime entry point
+# free of Bash 4-only associative arrays, even when tests run on newer Bash.
+RUNTIME_SHELL_FILES=(
+  "$PACKAGE_ROOT/bin/rb-ralph"
+  "$PACKAGE_ROOT/bin/rb-ralph-watch"
+  "$PACKAGE_ROOT/adapters/adapter-utils.sh"
+  "$PACKAGE_ROOT/adapters/claude.sh"
+  "$PACKAGE_ROOT/adapters/codex.sh"
+  "$PACKAGE_ROOT/adapters/api.sh"
+  "$PACKAGE_ROOT/adapters/opencode.sh"
+  "$PACKAGE_ROOT/install.sh"
+  "$PACKAGE_ROOT/rb-ralph.sh"
+  "$PACKAGE_ROOT/rb-ralph-watch.sh"
+  "$PACKAGE_ROOT/uninstall.sh"
+)
+if grep -n -E '(^|[[:space:]])(declare|local)[[:space:]]+-A' "${RUNTIME_SHELL_FILES[@]}"; then
+  fail "runtime shell scripts require associative arrays unavailable in Bash 3.2"
+fi
+ok "runtime shell scripts avoid Bash 4 associative arrays"
+
 # 1. The source runner works through its real path without relying on cwd.
 REAL_PROJECT="$(new_project real-path)"
 (cd / && "$RALPH" --project "$REAL_PROJECT" --list) > "$TEMP_ROOT/real-path.out"
@@ -161,28 +195,72 @@ INSTALL_PREFIX="$TEMP_ROOT/installed prefix"
 "$INSTALL_ENTRY" --install --prefix "$INSTALL_PREFIX" > "$TEMP_ROOT/install.out"
 [ -L "$INSTALL_PREFIX/bin/rb-ralph" ] || fail "installed launcher is not a symlink"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/adapters/codex.sh" ] || fail "installed adapters are missing"
+[ -x "$INSTALL_PREFIX/libexec/rb-ralph/adapters/api.sh" ] || fail "installed direct API adapter is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/adapters/opencode.sh" ] || fail "installed OpenCode adapter is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/evidence.cjs" ] || fail "installed evidence helper is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/control-plane.cjs" ] || fail "installed control-plane helper is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/splash.cjs" ] || fail "installed splash helper is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/process-supervisor.cjs" ] || fail "installed process supervisor is missing"
+[ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/evidence-index.cjs" ] || fail "installed evidence index is missing"
+[ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/validation-cache.cjs" ] || fail "installed validation cache is missing"
+[ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/manager-audit.cjs" ] || fail "installed manager audit validator is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/operational-verifier.cjs" ] || fail "installed operational verifier is missing"
+[ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/fragment-discovery.cjs" ] || fail "installed fragment discovery helper is missing"
+[ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/profiles.cjs" ] || fail "installed profile helper is missing"
 [ -f "$INSTALL_PREFIX/libexec/rb-ralph/VERSION" ] || fail "installed version marker is missing"
 [ -x "$INSTALL_PREFIX/bin/rb-ralph-watch" ] || fail "installed dashboard launcher is missing"
 ok "temporary-prefix installation keeps launcher and auxiliary resources together"
 "$RALPH" --ver > "$TEMP_ROOT/source-version.out"
 "$INSTALL_PREFIX/bin/rb-ralph" --version > "$TEMP_ROOT/installed-version.out"
 "$INSTALL_PREFIX/bin/rb-ralph" --help > "$TEMP_ROOT/installed-help.out"
-assert_contains "$TEMP_ROOT/source-version.out" "RB Ralph 0.5.1" "source runner reports its package version"
-assert_contains "$TEMP_ROOT/installed-version.out" "RB Ralph 0.5.1" "installed runner reports the same package version"
-assert_contains "$TEMP_ROOT/install.out" "RB Ralph 0.5.1 installed" "installer reports the installed version"
+assert_contains "$TEMP_ROOT/source-version.out" "RB Ralph $PACKAGE_VERSION" "source runner reports its package version"
+assert_contains "$TEMP_ROOT/installed-version.out" "RB Ralph $PACKAGE_VERSION" "installed runner reports the same package version"
+assert_contains "$TEMP_ROOT/install.out" "RB Ralph $PACKAGE_VERSION installed" "installer reports the installed version"
 assert_contains "$TEMP_ROOT/installed-help.out" "--splash" "installed runner exposes the animated splash flag"
+RB_RALPH_CORE_CLI=/bin/echo "$RALPH" --login > "$TEMP_ROOT/login-delegation.out"
+assert_contains "$TEMP_ROOT/login-delegation.out" "auth login" \
+  "Ralph login delegates to the shared RB Harness credential service"
+RB_RALPH_CORE_CLI=/bin/echo "$RALPH" provider list --json > "$TEMP_ROOT/provider-list-delegation.out"
+assert_contains "$TEMP_ROOT/provider-list-delegation.out" "provider list --json" \
+  "Ralph provider list delegates to the shared provider registry"
+RB_RALPH_CORE_CLI=/bin/echo "$RALPH" provider test --provider deepseek \
+  --model deepseek-v4-pro --credential pessoal > "$TEMP_ROOT/provider-test-delegation.out"
+assert_contains "$TEMP_ROOT/provider-test-delegation.out" "provider test --provider deepseek" \
+  "Ralph provider test delegates to the shared API connection probe"
+RB_RALPH_CORE_CLI=/bin/echo "$RALPH" provider test > "$TEMP_ROOT/provider-test-wizard-delegation.out"
+assert_contains "$TEMP_ROOT/provider-test-wizard-delegation.out" "provider test" \
+  "Ralph provider test without options delegates to the shared guided wizard"
+assert_contains "$PACKAGE_ROOT/bin/rb-ralph" 'RB_PROVIDER_CLI_NAME=rb-ralph core_cli_call "$@"' \
+  "Ralph identifies itself to shared provider diagnostics"
+assert_contains "$PACKAGE_ROOT/bin/rb-ralph" '╰──◡◡──╯          RALPH · capivara de plantão' \
+  "static brand preserves Ralph the capybara"
+assert_contains "$PACKAGE_ROOT/lib/dashboard.cjs" '╰──◡◡──╯${" ".repeat(10)}RALPH · capivara de plantão' \
+  "wide dashboard preserves Ralph the capybara"
 node -e '
   const { compose } = require(process.argv[1]);
-  const frame = compose("0.5.1", 100).join("\n");
-  if (!frame.includes("v0.5.1") || !frame.includes("RALPH · capivara de plantão")) process.exit(1);
-' "$INSTALL_PREFIX/libexec/rb-ralph/lib/splash.cjs"
-ok "installed splash renders the versioned RB Ralph identity"
+  const frame = compose(process.argv[2], 100).join("\n");
+  const capybara = ["◕                    ◕", "▪      ▪", "◡◡"];
+  if (!frame.includes(`v${process.argv[2]}`) || !frame.includes("RALPH · capivara de plantão") ||
+      !capybara.every((feature) => frame.includes(feature))) process.exit(1);
+' "$INSTALL_PREFIX/libexec/rb-ralph/lib/splash.cjs" "$PACKAGE_VERSION"
+ok "installed splash preserves the versioned Ralph capybara"
+
+# No-argument automation must fail promptly instead of consuming a CI stdin.
+expect_failure "$TEMP_ROOT/no-arguments.out" "$RALPH"
+assert_contains "$TEMP_ROOT/no-arguments.out" "stdin/stdout are not interactive" \
+  "no-argument non-interactive invocation never blocks waiting for wizard input"
+
+# An explicit wizard can be driven through stdin for deterministic smoke tests.
+printf '%s\n' "$REAL_PROJECT" '' '' '' '' '' '' '' mostrar | \
+  RB_RALPH_PROFILES_FILE="$TEMP_ROOT/wizard-config/profiles.json" \
+  "$RALPH" --wizard > "$TEMP_ROOT/wizard.out" 2> "$TEMP_ROOT/wizard.err"
+assert_contains "$TEMP_ROOT/wizard.out" "RB Ralph · execução assistida" \
+  "explicit wizard starts the assisted execution flow"
+assert_contains "$TEMP_ROOT/wizard.out" "--plan init-minimal-execution" \
+  "wizard discovers and selects a ready execution plan"
+assert_contains "$TEMP_ROOT/wizard.out" "--agent-provider codex" \
+  "wizard builds a provider command without starting it in show mode"
+assert_not_exists "$REAL_PROJECT/.rb/runs" "wizard show mode creates no run state"
 SPACE_PROJECT="$(new_project 'project with spaces')"
 (cd / && "$INSTALL_PREFIX/bin/rb-ralph" --project "$SPACE_PROJECT" --list) > "$TEMP_ROOT/spaces.out"
 assert_contains "$TEMP_ROOT/spaces.out" "init-minimal-execution" "installed layout supports paths containing spaces"
@@ -218,6 +296,129 @@ assert_contains "$CORE_TRACE" "path" "rb-harness on PATH is the final discovery 
 expect_failure "$TEMP_ROOT/core-error.out" env RB_RALPH_HOME="$EMPTY_HOME" PATH=/usr/bin:/bin \
   "$RALPH" --project "$REAL_PROJECT" --list
 assert_contains "$TEMP_ROOT/core-error.out" "Use --core-cli" "missing core reports actionable recovery options"
+
+# Reusable profiles are strict data, survive installation, and remain lower
+# precedence than flags supplied for a particular run.
+PROFILE_FILE="$TEMP_ROOT/profile-home/rb-ralph/profiles.json"
+printf '%s\n' '{
+  "description": "Mixed providers for contract tests.",
+  "agent": {"provider": "claude", "model": "opus", "effort": "high"},
+  "manager": {"provider": "codex", "model": "gpt-5.6-sol", "effort": "xhigh"},
+  "execution": {
+    "unit": "phase",
+    "managerAudit": "legacy",
+    "finalAudit": false,
+    "dashboard": false,
+    "permissionMode": "yolo"
+  }
+}' | RB_RALPH_PROFILES_FILE="$PROFILE_FILE" node "$PACKAGE_ROOT/lib/profiles.cjs" save mixed >/dev/null
+RB_RALPH_PROFILES_FILE="$PROFILE_FILE" "$RALPH" profile list > "$TEMP_ROOT/profiles-list.out"
+RB_RALPH_PROFILES_FILE="$PROFILE_FILE" "$RALPH" profile show mixed > "$TEMP_ROOT/profile-show.out"
+RB_RALPH_PROFILES_FILE="$PROFILE_FILE" "$RALPH" profile path > "$TEMP_ROOT/profile-path.out"
+assert_contains "$TEMP_ROOT/profiles-list.out" $'balanced\tbuilt-in' \
+  "profile list exposes immutable built-in strategies"
+assert_contains "$TEMP_ROOT/profiles-list.out" $'mixed\tuser' \
+  "profile list exposes a saved user strategy"
+assert_contains "$TEMP_ROOT/profile-show.out" '"contract": "rb-ralph-profiles/v1"' \
+  "profile show identifies the versioned data contract"
+assert_contains "$TEMP_ROOT/profile-path.out" "$PROFILE_FILE" \
+  "profile path honors the isolated profile-file override"
+node -e '
+  const fs = require("node:fs");
+  const mode = fs.statSync(process.argv[1]).mode & 0o777;
+  if (mode !== 0o600) process.exit(1);
+' "$PROFILE_FILE" || fail "saved profile file is not mode 0600"
+ok "saved profile file is private"
+
+printf '%s\n' '{"credential":"must-be-rejected","agent":{"provider":"codex"}}' | \
+  expect_failure "$TEMP_ROOT/profile-secret-field.out" env RB_RALPH_PROFILES_FILE="$PROFILE_FILE" \
+    node "$PACKAGE_ROOT/lib/profiles.cjs" save unsafe
+assert_contains "$TEMP_ROOT/profile-secret-field.out" "profile.credential is not supported" \
+  "profiles reject credential-like and all other unknown fields"
+
+printf '%s\n' '{
+  "description": "Direct API credential references.",
+  "agent": {"provider": "deepseek", "model": "deepseek-v4-pro", "credential": "pessoal"},
+  "manager": {"provider": "openrouter", "model": "vendor/auditor", "credential": "auditor"}
+}' | RB_RALPH_PROFILES_FILE="$PROFILE_FILE" node "$PACKAGE_ROOT/lib/profiles.cjs" save api-direct >/dev/null
+RB_RALPH_PROFILES_FILE="$PROFILE_FILE" node "$PACKAGE_ROOT/lib/profiles.cjs" args api-direct > "$TEMP_ROOT/profile-direct-args.out"
+assert_contains "$TEMP_ROOT/profile-direct-args.out" "--agent-credential" \
+  "profiles retain direct API credential references"
+assert_contains "$TEMP_ROOT/profile-direct-args.out" "pessoal" \
+  "profiles serialize the executor credential label without secret material"
+assert_contains "$TEMP_ROOT/profile-direct-args.out" "--manager-credential" \
+  "profiles retain an independent manager credential reference"
+
+printf '%s\n' '{"agent":{"provider":"codex","credential":"invalid"}}' | \
+  expect_failure "$TEMP_ROOT/profile-cli-credential.out" env RB_RALPH_PROFILES_FILE="$PROFILE_FILE" \
+    node "$PACKAGE_ROOT/lib/profiles.cjs" save cli-secret
+assert_contains "$TEMP_ROOT/profile-cli-credential.out" "valid only with a direct API provider" \
+  "profiles reject credential references for CLI providers"
+
+DIRECT_VALIDATION_PROJECT="$(new_project direct-api-validation)"
+expect_failure "$TEMP_ROOT/direct-missing-model.out" \
+  "$RALPH" --project "$DIRECT_VALIDATION_PROJECT" --provider deepseek --yolo
+assert_contains "$TEMP_ROOT/direct-missing-model.out" "requires --agent-model or --model" \
+  "direct API execution requires an explicit provider model ID"
+expect_failure "$TEMP_ROOT/direct-protected.out" \
+  "$RALPH" --project "$DIRECT_VALIDATION_PROJECT" --provider deepseek \
+    --model deepseek-v4-pro --protected
+assert_contains "$TEMP_ROOT/direct-protected.out" "cannot provide an OS sandbox" \
+  "direct API executors reject a misleading protected mode"
+
+expect_failure "$TEMP_ROOT/direct-adapter-invalid-provider.out" env \
+  RB_RALPH_PROVIDER=invalid RB_RALPH_ROLE=agent \
+  RB_RALPH_PROJECT_ROOT="$DIRECT_VALIDATION_PROJECT" RB_RALPH_MODEL=model \
+  "$PACKAGE_ROOT/adapters/api.sh"
+assert_contains "$TEMP_ROOT/direct-adapter-invalid-provider.out" "must select a direct API provider" \
+  "direct API adapter rejects unknown providers before any network call"
+
+printf 'executor prompt\n' | env \
+  RB_RALPH_PROVIDER=deepseek RB_RALPH_ROLE=agent \
+  RB_RALPH_PROJECT_ROOT="$DIRECT_VALIDATION_PROJECT" RB_RALPH_MODEL=deepseek-v4-pro \
+  RB_RALPH_CREDENTIAL=pessoal RB_RALPH_DIRECT_API_CORE=/bin/echo \
+  "$PACKAGE_ROOT/adapters/api.sh" > "$TEMP_ROOT/direct-adapter-contract.out"
+assert_contains "$TEMP_ROOT/direct-adapter-contract.out" "_provider-run" \
+  "direct API adapter delegates through the selected shared Harness core"
+assert_contains "$TEMP_ROOT/direct-adapter-contract.out" "deepseek-v4-pro" \
+  "direct API adapter forwards the explicit provider model"
+assert_contains "$TEMP_ROOT/direct-adapter-contract.out" "pessoal" \
+  "direct API adapter forwards only the saved credential reference"
+expect_failure "$TEMP_ROOT/profile-built-in-delete.out" env RB_RALPH_PROFILES_FILE="$PROFILE_FILE" \
+  "$RALPH" profile delete balanced
+assert_contains "$TEMP_ROOT/profile-built-in-delete.out" "immutable" \
+  "built-in profiles cannot be changed or deleted"
+
+: > "$MOCK_STATE/roles.log"
+PROFILE_PROJECT="$(new_project profile-mixed-providers)"
+RB_RALPH_PROFILES_FILE="$PROFILE_FILE" run_role_project profile-mixed \
+  "$PROFILE_PROJECT" --profile mixed >/dev/null
+assert_contains "$MOCK_STATE/roles.log" "claude|agent" \
+  "saved profile configures the executor provider"
+assert_contains "$MOCK_STATE/roles.log" "codex|manager" \
+  "saved profile configures an independent manager provider"
+assert_contains "$MOCK_STATE/roles.log" "generic_agent_model=opus|generic_manager_model=gpt-5.6-sol" \
+  "saved profile preserves independent role models"
+
+: > "$MOCK_STATE/roles.log"
+PROFILE_OVERRIDE_PROJECT="$(new_project profile-explicit-override)"
+RB_RALPH_PROFILES_FILE="$PROFILE_FILE" run_role_project profile-override \
+  "$PROFILE_OVERRIDE_PROJECT" --profile mixed --provider opencode \
+  --model explicit-model --effort max >/dev/null
+assert_contains "$MOCK_STATE/roles.log" "opencode|agent" \
+  "explicit shared provider replaces the profile executor"
+assert_contains "$MOCK_STATE/roles.log" "opencode|manager" \
+  "explicit shared provider replaces the profile manager"
+assert_not_contains "$MOCK_STATE/roles.log" "claude|agent" \
+  "profile provider does not survive an explicit shared override"
+assert_contains "$MOCK_STATE/roles.log" \
+  "generic_agent_model=explicit-model|generic_manager_model=explicit-model" \
+  "explicit shared model replaces both role models from a profile"
+
+RB_RALPH_PROFILES_FILE="$PROFILE_FILE" "$RALPH" profile delete mixed >/dev/null
+RB_RALPH_PROFILES_FILE="$PROFILE_FILE" "$RALPH" profile list > "$TEMP_ROOT/profiles-after-delete.out"
+assert_not_contains "$TEMP_ROOT/profiles-after-delete.out" $'mixed\tuser' \
+  "profile delete removes only the named user strategy"
 
 # 6. --provider configures the same built-in provider for both independent roles.
 : > "$MOCK_STATE/roles.log"
@@ -309,6 +510,64 @@ assert_contains "$MOCK_STATE/roles.log" "model=vendor/custom-executor" \
 assert_contains "$MOCK_STATE/roles.log" \
   "generic_agent_model=vendor/custom-executor|generic_manager_model=vendor/custom-executor" \
   "custom manager inherits the executor model"
+
+# Reasoning effort follows the same provider-neutral precedence and inheritance
+# rules as model selection, while each built-in adapter translates it natively.
+: > "$MOCK_STATE/roles.log"
+SHARED_EFFORT_PROJECT="$(new_project effort-shared)"
+run_role_project effort-shared "$SHARED_EFFORT_PROJECT" \
+  --provider claude --effort high >/dev/null
+assert_contains "$MOCK_STATE/roles.log" "--effort high" \
+  "Claude receives the selected reasoning effort"
+assert_contains "$MOCK_STATE/roles.log" \
+  "generic_agent_effort=high|generic_manager_effort=high" \
+  "shared effort configures executor and manager"
+
+: > "$MOCK_STATE/roles.log"
+CODEX_EFFORT_PROJECT="$(new_project effort-codex-roles)"
+run_role_project effort-codex-roles "$CODEX_EFFORT_PROJECT" --provider codex \
+  --agent-effort medium --manager-effort xhigh >/dev/null
+assert_contains "$MOCK_STATE/roles.log" 'model_reasoning_effort="medium"' \
+  "Codex executor effort is translated to model_reasoning_effort"
+assert_contains "$MOCK_STATE/roles.log" 'model_reasoning_effort="xhigh"' \
+  "Codex manager receives its independent effort"
+
+: > "$MOCK_STATE/roles.log"
+OPENCODE_EFFORT_PROJECT="$(new_project effort-opencode)"
+run_role_project effort-opencode "$OPENCODE_EFFORT_PROJECT" \
+  --provider opencode --effort max >/dev/null
+assert_contains "$MOCK_STATE/roles.log" "--variant max" \
+  "OpenCode receives effort through its provider variant"
+
+: > "$MOCK_STATE/roles.log"
+CUSTOM_EFFORT_PROJECT="$(new_project effort-custom-contract)"
+run_role_project effort-custom-contract "$CUSTOM_EFFORT_PROJECT" \
+  --agent-cmd "$MOCK_DRIVER" --agent-effort high >/dev/null
+assert_contains "$MOCK_STATE/roles.log" \
+  "effort=high|generic_agent_effort=high|generic_manager_effort=high" \
+  "custom adapters receive current and resolved role efforts"
+
+: > "$MOCK_STATE/roles.log"
+MIXED_EFFORT_PROJECT="$(new_project effort-mixed-providers)"
+run_role_project effort-mixed-providers "$MIXED_EFFORT_PROJECT" \
+  --agent-provider claude --agent-effort high --manager-provider codex >/dev/null
+assert_contains "$MOCK_STATE/roles.log" \
+  "generic_agent_effort=high|generic_manager_effort=" \
+  "an explicitly different provider does not inherit executor effort"
+
+: > "$MOCK_STATE/roles.log"
+PROVIDER_EFFORT_PROJECT="$(new_project effort-provider-environment)"
+RB_RALPH_CODEX_AGENT_EFFORT=low run_role_project effort-provider-environment \
+  "$PROVIDER_EFFORT_PROJECT" --agent-provider codex >/dev/null
+assert_contains "$MOCK_STATE/roles.log" \
+  "generic_agent_effort=low|generic_manager_effort=low" \
+  "provider-specific executor effort remains compatible and is inherited"
+
+UNSAFE_EFFORT_PROJECT="$(new_project effort-unsafe)"
+expect_failure "$TEMP_ROOT/unsafe-effort.out" \
+  "$RALPH" --project "$UNSAFE_EFFORT_PROJECT" --agent-cmd "$MOCK_DRIVER" --effort 'high value'
+assert_contains "$TEMP_ROOT/unsafe-effort.out" "effort must be a provider-supported token" \
+  "unsafe effort values fail before invoking a provider"
 
 # YOLO is the shared default; protected mode is explicit and reaches built-in
 # and custom adapters through the provider-neutral environment contract.
@@ -420,6 +679,7 @@ grep -Fq 'manual: inspect generated evidence' "$RB_RALPH_VALIDATION_LOG"
 grep -Fq 'VALIDATION_COMMANDS: 1' "$prompt"
 grep -Fq 'MANUAL_VALIDATIONS: 1' "$prompt"
 grep -Fq 'AC-T001-01' "$prompt"
+grep -Fq 'Do not run, repeat, or independently re-create a command already represented' "$prompt"
 printf '%s\n' 'RB_RALPH_DECISION: COMPLETE' 'RB_RALPH_REASON: all evidence inspected'
 EVIDENCE_MANAGER
 chmod +x "$TEMP_ROOT/evidence-agent" "$TEMP_ROOT/evidence-manager"
@@ -435,6 +695,8 @@ MOCK_RUN_TAG=evidence "$RALPH" --project "$TITLE_PROJECT" --max-attempts 1 \
   --agent-cmd "$TEMP_ROOT/evidence-agent" --manager-cmd "$TEMP_ROOT/evidence-manager" \
   > "$TEMP_ROOT/evidence.out"
 assert_contains "$TEMP_ROOT/evidence.out" "P01 complete" "real execution preserves title and supplies complete manager evidence"
+assert_contains "$MOCK_STATE/evidence-manager.prompt" "RB Ralph is the sole executor" \
+  "manager is prohibited from repeating orchestrator-owned validation commands"
 
 # 15. An executor failure cannot be converted to COMPLETE by an optimistic manager.
 cat > "$TEMP_ROOT/failing-agent" <<'FAILING_AGENT'
@@ -541,7 +803,7 @@ assert_contains "$PACKAGE_ROOT/lib/dashboard.cjs" \
   'process.stdout.write(`\u001b[H\u001b[2J${frame}`);' \
   "live dashboard clears the complete screen before every frame"
 assert_contains "$PACKAGE_ROOT/bin/rb-ralph" 'RB_RALPH_SPLASH=1 node "$SPLASH_HELPER"' \
-  "--splash is rendered before the embedded dashboard starts"
+  "the splash helper is invoked through the packaged launcher"
 assert_contains "$PACKAGE_ROOT/bin/rb-ralph" 'RB_RALPH_SPLASH (0 or 1), RB_RALPH_SPLASH_MS' \
   "splash environment controls remain discoverable"
 
@@ -695,6 +957,28 @@ BUSY_SILENT_PROVIDER
     "Linux CPU progress prevents a false provider inactivity timeout"
   assert_not_contains "$TEMP_ROOT/busy-silent.log" 'RB_RALPH_PROCESS_STATUS: TIMEOUT' \
     "busy provider remains bounded by activity rather than output alone"
+
+  cat > "$TEMP_ROOT/active-no-output-provider" <<'ACTIVE_NO_OUTPUT_PROVIDER'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > /dev/null
+started="$SECONDS"
+while [ "$((SECONDS - started))" -lt 30 ]; do :; done
+ACTIVE_NO_OUTPUT_PROVIDER
+  chmod +x "$TEMP_ROOT/active-no-output-provider"
+  if node "$PACKAGE_ROOT/lib/process-supervisor.cjs" \
+    --input "$TEMP_ROOT/supervisor-input" --output "$TEMP_ROOT/first-output-timeout.log" \
+    --status "$TEMP_ROOT/first-output-status.json" \
+    --idle-timeout 0 --first-output-timeout 1 --timeout 10 --grace 1 --label executor \
+    -- "$TEMP_ROOT/active-no-output-provider"; then
+    fail "active provider without output escaped the first-output bound"
+  fi
+  assert_contains "$TEMP_ROOT/first-output-timeout.log" 'RB_RALPH_TIMEOUT_KIND: first-output' \
+    "active-but-silent provider has a distinct first-output timeout"
+  assert_contains "$TEMP_ROOT/first-output-status.json" '"state":"timeout"' \
+    "supervisor publishes an atomic final live-status record"
+  assert_contains "$TEMP_ROOT/first-output-status.json" '"outputBytes":0' \
+    "live status exposes bounded metadata without provider transcript text"
 
   cat > "$TEMP_ROOT/orphaning-provider" <<'ORPHANING_PROVIDER'
 #!/usr/bin/env bash
@@ -912,7 +1196,8 @@ TELEMETRY_PROJECT="$(new_project telemetry-dashboard)"
 RB_RALPH_CODEX_BIN="$TEMP_ROOT/telemetry-codex" \
 RB_RALPH_CODEX_AGENT_MODEL=priced-model \
   "$RALPH" --project "$TELEMETRY_PROJECT" --validation-mode manager --max-attempts 1 \
-  --agent-provider codex --pricing-file "$TEMP_ROOT/pricing.json" > "$TEMP_ROOT/telemetry-run.out"
+  --agent-provider codex --agent-effort high --manager-effort xhigh \
+  --pricing-file "$TEMP_ROOT/pricing.json" > "$TEMP_ROOT/telemetry-run.out"
 TELEMETRY_RUN="$(basename "$(find "$TELEMETRY_PROJECT/.rb/runs" -mindepth 1 -maxdepth 1 -type d -print -quit)")"
 RB_RALPH_WATCH_COLS=120 RB_RALPH_WATCH_LINES=50 \
   "$PACKAGE_ROOT/bin/rb-ralph-watch" --project "$TELEMETRY_PROJECT" --run "$TELEMETRY_RUN" \
@@ -929,11 +1214,12 @@ assert_contains "$TEMP_ROOT/dashboard.out" "G0 ✓  G1 ✓  G2 ⊘  G3 ✓" \
   "dashboard exposes all executor, evidence, validation, and manager gates"
 assert_contains "$TEMP_ROOT/dashboard.out" "ACESSO YOLO" \
   "dashboard makes unrestricted execution visible"
-assert_contains "$TEMP_ROOT/dashboard.out" "codex[priced-model] executor / codex[priced-model] manager" \
-  "dashboard identifies the effective model for each role"
+assert_contains "$TEMP_ROOT/dashboard.out" \
+  "codex[priced-model; effort=high] executor / codex[priced-model; effort=xhigh] manager" \
+  "dashboard identifies the effective model and effort for each role"
 assert_contains "$TEMP_ROOT/dashboard.out" "RALPH · capivara de plantão" \
   "wide dashboard renders the RB Ralph mascot"
-assert_contains "$TEMP_ROOT/dashboard.out" "v0.5.1" \
+assert_contains "$TEMP_ROOT/dashboard.out" "v$PACKAGE_VERSION" \
   "dashboard identifies the running RB Ralph version"
 assert_contains "$TEMP_ROOT/dashboard.out" "LOG RECENTE · GERENTE" \
   "dashboard shows the current role in a compact recent-log panel"
@@ -1013,11 +1299,13 @@ cat > "$TEMP_ROOT/claude-raw.json" <<'CLAUDE_JSON'
 CLAUDE_JSON
 RB_RALPH_ROLE=manager RB_RALPH_PHASE_ID=P99 RB_RALPH_ATTEMPT=1 \
   node "$PACKAGE_ROOT/lib/provider-telemetry.cjs" claude "$TEMP_ROOT/claude-raw.json" \
-  "$TEMP_ROOT/claude.usage.json" claude-test > "$TEMP_ROOT/claude-normalized.out"
+  "$TEMP_ROOT/claude.usage.json" claude-test high > "$TEMP_ROOT/claude-normalized.out"
 assert_contains "$TEMP_ROOT/claude-normalized.out" "claude normalized output" \
   "Claude JSON result is normalized for the manager protocol"
 assert_contains "$TEMP_ROOT/claude.usage.json" '"costSource": "provider"' \
   "provider-reported Claude cost is preserved without estimation"
+assert_contains "$TEMP_ROOT/claude.usage.json" '"effort": "high"' \
+  "provider telemetry preserves the effective reasoning effort"
 
 # Final product acceptance is runtime-only, stack/platform neutral, and runs
 # rb-operational/v1 in a secret-free disposable copy even in manager validation mode.
@@ -1228,6 +1516,104 @@ assert_contains "$TAMPER_LOG" 'RB_RALPH_CONTROL_PLANE_VIOLATION' \
 assert_contains "$TEMP_ROOT/control-plane-tampering.out" 'implementation agent or isolated integration exited with 1' \
   "manager optimism cannot override control-plane tampering"
 
+# A live owner keeps exclusive access, while an orphaned lock left by a power
+# loss is recovered automatically without deleting durable run evidence.
+ACTIVE_LOCK_PROJECT="$(new_project active-run-lock)"
+ACTIVE_LOCK_STATE="$(run_state_dir "$ACTIVE_LOCK_PROJECT")"
+mkdir -p "$ACTIVE_LOCK_STATE/.lock"
+ln -s "$(command -v sleep)" "$TEMP_ROOT/rb-ralph-lock-holder"
+"$TEMP_ROOT/rb-ralph-lock-holder" 30 &
+ACTIVE_LOCK_PID=$!
+printf '%s\n' "$ACTIVE_LOCK_PID" > "$ACTIVE_LOCK_STATE/.lock/owner.pid"
+expect_failure "$TEMP_ROOT/active-run-lock.out" env MOCK_RUN_TAG=active-run-lock \
+  "$RALPH" --project "$ACTIVE_LOCK_PROJECT" --validation-mode manager \
+  --agent-cmd "$TEMP_ROOT/custom-agent" --manager-cmd "$TEMP_ROOT/custom-manager"
+assert_contains "$TEMP_ROOT/active-run-lock.out" 'already locked by an active process' \
+  "an active Ralph owner keeps the run lock"
+kill "$ACTIVE_LOCK_PID" 2>/dev/null || true
+wait "$ACTIVE_LOCK_PID" 2>/dev/null || true
+rm -f -- "$ACTIVE_LOCK_STATE/.lock/owner.pid"
+rmdir "$ACTIVE_LOCK_STATE/.lock"
+
+STALE_LOCK_PROJECT="$(new_project stale-run-lock)"
+STALE_LOCK_STATE="$(run_state_dir "$STALE_LOCK_PROJECT")"
+mkdir -p "$STALE_LOCK_STATE/.lock/live"
+printf '%s\n' '99999999' > "$STALE_LOCK_STATE/.lock/owner.pid"
+printf '%s\n' '{"schema":"rb-ralph-provider-live/v1","role":"executor","pid":99999998,"state":"running"}' \
+  > "$STALE_LOCK_STATE/.lock/live/P01-attempt-1-agent.json"
+printf '%s\n' $'META\tstatus\trunning' $'META\tpid\t99999997' > "$STALE_LOCK_STATE/dashboard-live.tsv"
+MOCK_RUN_TAG=stale-run-lock "$RALPH" --project "$STALE_LOCK_PROJECT" --validation-mode manager \
+  --agent-cmd "$TEMP_ROOT/custom-agent" --manager-cmd "$TEMP_ROOT/custom-manager" \
+  > "$TEMP_ROOT/stale-run-lock.out"
+assert_contains "$TEMP_ROOT/stale-run-lock.out" 'recovered stale run lock with no active execution processes' \
+  "an orphaned power-loss lock is recovered automatically"
+assert_not_exists "$STALE_LOCK_STATE/.lock" "normal exit cleans the recovered lock"
+if find "$STALE_LOCK_STATE" -maxdepth 1 -type d -name '.lock.stale.*' -print -quit | grep -q .; then
+  fail "stale lock recovery left a quarantine directory behind"
+fi
+ok "stale lock recovery removes its bounded quarantine"
+
+# Plans generated by Beer and Code Harness are discovered directly from .spec,
+# normalized to rb-execution/v1 before provider startup, and never rewritten.
+FOREIGN_PROJECT="$(new_project beer-and-code-fragments)"
+mkdir -p "$FOREIGN_PROJECT/.spec/init" "$FOREIGN_PROJECT/.spec/features/demo"
+cat > "$FOREIGN_PROJECT/.spec/init/project-phases.md" <<'BEER_INIT'
+# Demo — Project Phases
+
+## Phase 1: Foundation
+
+**Goal:** Establish the demo foundation.
+
+### Phase 1.1: Files
+
+- [ ] **Task:** create the foundation marker
+  - **Acceptance criteria:**
+    - `src/foundation.txt` exists and contains `ready`.
+  - **Feature tests:** marker test proves the exact content.
+  - **Traces:** demo foundation.
+BEER_INIT
+cat > "$FOREIGN_PROJECT/.spec/features/demo/PHASES.md" <<'BEER_FEATURE'
+# Phases: demo
+
+## Phase 1: Implement demo
+
+Antes de implementar, leia:
+1. `.spec/features/demo/SPEC.md` — requisitos RIGID que esta fase cobre
+2. `.spec/features/demo/PLAN.md` — decomposição completa, dependências e riscos
+
+- [ ] T01 — create the demo marker
+      Arquivos: `src/demo.txt`
+      Mudança: create the marker with the exact value `ready`
+      Cobre: RF-01
+      Acceptance criteria: `src/demo.txt` exists and contains exactly `ready`.
+      Testes: `tests/demo.test` — proves the exact marker content
+BEER_FEATURE
+FOREIGN_SOURCE_HASH="$(node -e 'const fs=require("node:fs"),crypto=require("node:crypto"); process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"))' "$FOREIGN_PROJECT/.spec/features/demo/PHASES.md")"
+"$RALPH" --project "$FOREIGN_PROJECT" --fragments-dir .spec --list > "$TEMP_ROOT/foreign-list.out"
+assert_contains "$TEMP_ROOT/foreign-list.out" 'spec-init-project-phases-imported-execution' \
+  "Beer and Code init phases are discovered without a manifest"
+assert_contains "$TEMP_ROOT/foreign-list.out" 'spec-features-demo-phases-imported-execution' \
+  "Beer and Code feature phases are discovered without a manifest"
+assert_contains "$TEMP_ROOT/foreign-list.out" '.spec/features/demo/PHASES.md' \
+  "alternate fragment discovery reports the original physical path"
+assert_not_exists "$FOREIGN_PROJECT/.rb/runs" "alternate --list creates no Ralph execution state"
+"$RALPH" --project "$FOREIGN_PROJECT" --artifacts-dir .spec \
+  --plan spec-features-demo-phases-imported-execution --dry-run > "$TEMP_ROOT/foreign-dry-run.out"
+assert_contains "$TEMP_ROOT/foreign-dry-run.out" 'phase=P01' \
+  "Beer and Code phases normalize to a validated RB execution schedule"
+assert_not_exists "$FOREIGN_PROJECT/.rb/runs" "alternate --dry-run creates no Ralph execution state"
+MOCK_RUN_TAG=foreign-fragments "$RALPH" --project "$FOREIGN_PROJECT" --artifacts-dir .spec \
+  --plan spec-features-demo-phases-imported-execution --validation-mode manager \
+  --agent-cmd "$TEMP_ROOT/custom-agent" --manager-cmd "$TEMP_ROOT/custom-manager" \
+  > "$TEMP_ROOT/foreign-run.out"
+assert_contains "$TEMP_ROOT/foreign-run.out" 'source-format=beer-and-code/v1' \
+  "Ralph identifies the compatibility dialect before execution"
+[ "$FOREIGN_SOURCE_HASH" = "$(node -e 'const fs=require("node:fs"),crypto=require("node:crypto"); process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"))' "$FOREIGN_PROJECT/.spec/features/demo/PHASES.md")" ] \
+  || fail "Ralph modified the foreign planning fragment"
+ok "foreign planning fragments remain read-only"
+[ -d "$FOREIGN_PROJECT/.rb/runs" ] || fail "foreign execution state was not isolated under .rb/runs"
+ok "foreign fragments keep Ralph runtime state isolated under .rb/runs"
+
 # 18. Both safe inspection modes avoid execution state.
 INSPECTION_PROJECT="$(new_project inspection-only)"
 "$RALPH" --project "$INSPECTION_PROJECT" --list >/dev/null
@@ -1244,10 +1630,25 @@ assert_not_exists "$INSTALL_PREFIX/libexec/rb-ralph" "self-installer removes its
 "$RALPH" --help > "$TEMP_ROOT/help.out"
 assert_contains "$TEMP_ROOT/help.out" 'AUTONOMOUS CONTROL PLANE' "--help renders the RB Ralph ASCII wordmark"
 assert_contains "$TEMP_ROOT/help.out" 'capivara de plantão' "--help introduces the Ralph mascot"
+assert_contains "$TEMP_ROOT/help.out" '--splash' "--help exposes the standalone splash command"
+assert_contains "$TEMP_ROOT/help.out" '--no-splash' "--help exposes the splash opt-out"
+assert_contains "$TEMP_ROOT/help.out" '--wizard' "--help exposes the interactive command builder"
+assert_contains "$TEMP_ROOT/help.out" '--profile <name>' "--help exposes reusable execution profiles"
+assert_contains "$TEMP_ROOT/help.out" '--no-dashboard' "--help allows explicit profile dashboard override"
+
+# The splash is decoration: without a TTY it must stay silent and still succeed.
+"$RALPH" --splash > "$TEMP_ROOT/splash.out" 2>&1
+if [ ! -s "$TEMP_ROOT/splash.out" ]; then
+  ok "--splash writes nothing when stdout is not a terminal"
+else
+  fail "--splash emitted output without a terminal"
+fi
 assert_contains "$TEMP_ROOT/help.out" './rb-ralph.sh --install' "--help explains installation"
 assert_contains "$TEMP_ROOT/help.out" 'rb-ralph --project /path/to/project --list' "--help provides inspection commands"
 assert_contains "$TEMP_ROOT/help.out" '--agent-provider claude --agent-model sonnet' "--help provides separate-role model command"
 assert_contains "$TEMP_ROOT/help.out" '--agent-model deepseek/deepseek-chat' "--help provides an OpenCode model example"
+assert_contains "$TEMP_ROOT/help.out" '--agent-effort <level>' "--help exposes executor reasoning effort"
+assert_contains "$TEMP_ROOT/help.out" '--manager-effort <lvl>' "--help exposes manager reasoning effort"
 assert_contains "$TEMP_ROOT/help.out" 'rb-ralph-watch --project /path/to/project' "--help explains the live dashboard command"
 assert_contains "$TEMP_ROOT/help.out" '--protected' "--help explains the protected opt-in"
 assert_contains "$TEMP_ROOT/help.out" 'defaults to YOLO' "--help warns about the unrestricted default"
@@ -1255,7 +1656,13 @@ assert_contains "$TEMP_ROOT/help.out" '--max-total-attempts N' "--help exposes t
 assert_contains "$TEMP_ROOT/help.out" '--max-strategy-resets N' "--help exposes bounded strategy recovery"
 assert_contains "$TEMP_ROOT/help.out" '--manager-retries <n>' "--help exposes same-evidence manager recovery"
 assert_contains "$TEMP_ROOT/help.out" '--agent-idle-timeout N' "--help exposes executor inactivity recovery"
+assert_contains "$TEMP_ROOT/help.out" '--agent-first-output-timeout N' "--help exposes executor first-output bound"
+assert_contains "$TEMP_ROOT/help.out" '--artifacts-dir <dir>' "--help exposes alternate artifact directories"
+assert_contains "$TEMP_ROOT/help.out" 'alias: --fragments-dir' "--help documents the fragment-directory alias"
 assert_contains "$TEMP_ROOT/help.out" '--manager-idle-timeout N' "--help exposes manager inactivity recovery"
+assert_contains "$TEMP_ROOT/help.out" '--manager-first-output-timeout N' "--help exposes manager first-output bound"
+assert_contains "$TEMP_ROOT/help.out" '--manager-audit <mode>' "--help exposes exhaustive manager audit mode"
+assert_contains "$TEMP_ROOT/help.out" '--execution-unit <m>' "--help exposes fresh execution-unit boundary"
 assert_contains "$TEMP_ROOT/help.out" '--operations <path>' "--help exposes the operational contract override"
 assert_contains "$TEMP_ROOT/help.out" '--no-final-audit' "--help documents the explicit final-audit opt-out"
 assert_contains "$TEMP_ROOT/help.out" '--ver, --version' "--help exposes version inspection"

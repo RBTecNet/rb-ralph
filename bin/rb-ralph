@@ -25,9 +25,16 @@ EVIDENCE_HELPER="$RB_RALPH_HOME/lib/evidence.cjs"
 TELEMETRY_HELPER="$RB_RALPH_HOME/lib/provider-telemetry.cjs"
 USAGE_HELPER="$RB_RALPH_HOME/lib/usage-summary.cjs"
 PROCESS_SUPERVISOR="$RB_RALPH_HOME/lib/process-supervisor.cjs"
+EVIDENCE_INDEX_HELPER="$RB_RALPH_HOME/lib/evidence-index.cjs"
+VALIDATION_CACHE_HELPER="$RB_RALPH_HOME/lib/validation-cache.cjs"
+AGENT_CONTEXT_HELPER="$RB_RALPH_HOME/lib/agent-context.cjs"
+AGENT_ACTIVITY_HELPER="$RB_RALPH_HOME/lib/agent-activity.cjs"
+MANAGER_AUDIT_HELPER="$RB_RALPH_HOME/lib/manager-audit.cjs"
 OPERATIONAL_VERIFIER="$RB_RALPH_HOME/lib/operational-verifier.cjs"
 CONTROL_PLANE_HELPER="$RB_RALPH_HOME/lib/control-plane.cjs"
 SPLASH_HELPER="$RB_RALPH_HOME/lib/splash.cjs"
+FRAGMENT_DISCOVERY_HELPER="$RB_RALPH_HOME/lib/fragment-discovery.cjs"
+PROFILE_HELPER="$RB_RALPH_HOME/lib/profiles.cjs"
 DASHBOARD_CLI="$RB_RALPH_HOME/bin/rb-ralph-watch"
 CORE_CLI_OPTION=""
 CORE_CLI_ENV="${RB_RALPH_CORE_CLI:-}"
@@ -36,6 +43,10 @@ MEMORY_CLI="${RB_RALPH_MEMORY_CLI:-rb-memory}"
 
 PROJECT="."
 PLAN_SELECTOR=""
+ARTIFACTS_DIR_INPUT="${RB_RALPH_ARTIFACTS_DIR:-.rb}"
+ARTIFACTS_DIR=""
+ARTIFACTS_RELATIVE=""
+DISCOVERY_TEMP_ROOT=""
 ENV_AGENT_CMD="${RB_RALPH_AGENT_CMD:-}"
 ENV_MANAGER_CMD="${RB_RALPH_MANAGER_CMD:-}"
 ENV_AGENT_PROVIDER="${RB_RALPH_AGENT_PROVIDER:-}"
@@ -43,6 +54,12 @@ ENV_MANAGER_PROVIDER="${RB_RALPH_MANAGER_PROVIDER:-}"
 ENV_SHARED_MODEL="${RB_RALPH_MODEL:-}"
 ENV_AGENT_MODEL="${RB_RALPH_AGENT_MODEL:-}"
 ENV_MANAGER_MODEL="${RB_RALPH_MANAGER_MODEL:-}"
+ENV_SHARED_EFFORT="${RB_RALPH_EFFORT:-}"
+ENV_AGENT_EFFORT="${RB_RALPH_AGENT_EFFORT:-}"
+ENV_MANAGER_EFFORT="${RB_RALPH_MANAGER_EFFORT:-}"
+ENV_SHARED_CREDENTIAL="${RB_RALPH_CREDENTIAL:-}"
+ENV_AGENT_CREDENTIAL="${RB_RALPH_AGENT_CREDENTIAL:-}"
+ENV_MANAGER_CREDENTIAL="${RB_RALPH_MANAGER_CREDENTIAL:-}"
 SHARED_PROVIDER=""
 CLI_AGENT_CMD=""
 CLI_MANAGER_CMD=""
@@ -59,12 +76,28 @@ CLI_MANAGER_MODEL=""
 CLI_SHARED_MODEL_SET=0
 CLI_AGENT_MODEL_SET=0
 CLI_MANAGER_MODEL_SET=0
+CLI_SHARED_EFFORT=""
+CLI_AGENT_EFFORT=""
+CLI_MANAGER_EFFORT=""
+CLI_SHARED_EFFORT_SET=0
+CLI_AGENT_EFFORT_SET=0
+CLI_MANAGER_EFFORT_SET=0
+CLI_SHARED_CREDENTIAL=""
+CLI_AGENT_CREDENTIAL=""
+CLI_MANAGER_CREDENTIAL=""
+CLI_SHARED_CREDENTIAL_SET=0
+CLI_AGENT_CREDENTIAL_SET=0
+CLI_MANAGER_CREDENTIAL_SET=0
 AGENT_CMD=""
 MANAGER_CMD=""
 AGENT_PROVIDER=""
 MANAGER_PROVIDER=""
 AGENT_MODEL=""
 MANAGER_MODEL=""
+AGENT_EFFORT=""
+MANAGER_EFFORT=""
+AGENT_CREDENTIAL=""
+MANAGER_CREDENTIAL=""
 MANAGER_INHERITS_AGENT=0
 MAX_ATTEMPTS="${RB_RALPH_MAX_ATTEMPTS:-3}"
 MAX_TOTAL_ATTEMPTS="${RB_RALPH_MAX_TOTAL_ATTEMPTS:-12}"
@@ -74,8 +107,19 @@ MANAGER_RETRY_WAIT="${RB_RALPH_MANAGER_RETRY_WAIT:-5}"
 MAX_INCOMPLETE_RETRIES="${RB_RALPH_MAX_INCOMPLETE_RETRIES:-2}"
 AGENT_TIMEOUT="${RB_RALPH_AGENT_TIMEOUT:-3600}"
 AGENT_IDLE_TIMEOUT="${RB_RALPH_AGENT_IDLE_TIMEOUT:-300}"
+AGENT_FIRST_OUTPUT_TIMEOUT="${RB_RALPH_AGENT_FIRST_OUTPUT_TIMEOUT:-300}"
 MANAGER_TIMEOUT="${RB_RALPH_MANAGER_TIMEOUT:-900}"
 MANAGER_IDLE_TIMEOUT="${RB_RALPH_MANAGER_IDLE_TIMEOUT:-180}"
+MANAGER_FIRST_OUTPUT_TIMEOUT="${RB_RALPH_MANAGER_FIRST_OUTPUT_TIMEOUT:-180}"
+MANAGER_AUDIT_MODE="${RB_RALPH_MANAGER_AUDIT_MODE:-exhaustive}"
+# How deeply the manager reviews. `delivery` asks one question — did the
+# executor deliver what the fragment asked for? — and accepts when it did.
+# `code` additionally audits the changed source for defects the criteria did
+# not name. Neither mode can approve past a deterministic gate: a non-zero
+# executor exit, a red validation, or a finding reopened on unchanged evidence
+# still turns COMPLETE into RETRY, in code rather than in the prompt.
+MANAGER_REVIEW_MODE="${RB_RALPH_MANAGER_REVIEW:-delivery}"
+EXECUTION_UNIT="${RB_RALPH_EXECUTION_UNIT:-task}"
 VALIDATION_MODE="${RB_RALPH_VALIDATION_MODE:-run}"
 VALIDATION_TIMEOUT="${RB_RALPH_VALIDATION_TIMEOUT:-900}"
 PARALLEL_LIMIT="${RB_RALPH_PARALLEL:-1}"
@@ -84,12 +128,17 @@ RATE_LIMIT_WAIT="${RB_RALPH_RATE_LIMIT_WAIT:-60}"
 MAX_RATE_LIMIT_WAITS="${RB_RALPH_MAX_RATE_LIMIT_WAITS:-20}"
 MAX_RATE_LIMIT_WAIT="${RB_RALPH_MAX_RATE_LIMIT_WAIT:-3600}"
 ISOLATION="${RB_RALPH_ISOLATION:-shared}"
+# Pre-loaded repository context for a fresh executor call. On by default: the
+# agent otherwise rediscovers what the orchestrator already resolved.
+AGENT_CONTEXT="${RB_RALPH_AGENT_CONTEXT:-1}"
+AGENT_CONTEXT_BYTES="${RB_RALPH_AGENT_CONTEXT_BYTES:-49152}"
+MANAGER_CONTEXT_BYTES="${RB_RALPH_MANAGER_CONTEXT_BYTES:-65536}"
 MEMORY_MCP_URL="${RB_RALPH_MEMORY_MCP_URL:-}"
 MEMORY_MODE="${RB_RALPH_MEMORY_MODE:-}"
 MEMORY_TOKEN_ENV="${RB_RALPH_MEMORY_TOKEN_ENV:-RB_MEMORY_TOKEN}"
 PRICING_FILE="${RB_RALPH_PRICING_FILE:-}"
 FINAL_AUDIT="${RB_RALPH_FINAL_AUDIT:-1}"
-SPLASH="${RB_RALPH_SPLASH:-0}"
+SPLASH="${RB_RALPH_SPLASH:-1}"
 OPERATIONAL_CONTRACT_OPTION=""
 OPERATIONAL_CONTRACT_ENV="${RB_RALPH_OPERATIONAL_CONTRACT:-}"
 OPERATIONAL_CONTRACT=""
@@ -113,22 +162,36 @@ DASHBOARD_PHASE=""
 DASHBOARD_ATTEMPT=""
 DASHBOARD_ACTIVITY=""
 DASHBOARD_REASON=""
+DASHBOARD_FINDINGS="total=0 open=0 resolved=0 new=0"
 ACTIVE_WORKTREES=()
 ACTIVE_TEMP_ROOTS=()
-declare -A DASHBOARD_PHASE_STATUS=()
-declare -A DASHBOARD_PHASE_ATTEMPT=()
-declare -A DASHBOARD_PHASE_GATES=()
+DASHBOARD_PHASE_IDS=()
+DASHBOARD_PHASE_STATUS=()
+DASHBOARD_PHASE_ATTEMPT=()
+DASHBOARD_PHASE_GATES=()
+DASHBOARD_PHASE_INDEX=-1
 TSV_SEPARATOR=$'\034'
 
 print_brand() {
   cat <<'BRAND'
-█▀█ █▄▄   █▀█ ▄▀█ █░░ █▀█ █░█                    ╭──╮
-█▀▄ █▄█   █▀▄ █▀█ █▄▄ █▀▀ █▀█                 ╭╮ ╰──╯ ╭╮
-     AUTONOMOUS CONTROL PLANE               ╭──╯╰──────╯╰──╮
-                                           /    ●      ●    \
-                                          |        ▰          |
-                                           ╰─────────────────╯  RALPH · capivara de plantão
+█▀█ █▄▄   █▀█ ▄▀█ █░░ █▀█ █░█           ╭─╮          ╭─╮
+█▀▄ █▄█   █▀▄ █▀█ █▄▄ █▀▀ █▀█         ╭─╯ ╰──────────╯ ╰─╮
+     AUTONOMOUS CONTROL PLANE         │     ◕      ◕     │
+                                      ╰──╮  ╭──────╮  ╭──╯
+                                         ╰──┤ ▪  ▪ ├──╯
+                                            ╰──◡◡──╯          RALPH · capivara de plantão
 BRAND
+}
+
+# Cosmetic-only startup animation. Any failure is swallowed so a missing helper,
+# an unusual terminal, or a Ctrl-C never changes how the run itself behaves.
+play_splash() {
+  [ "${RB_RALPH_SPLASH_SHOWN:-0}" != "1" ] || return 0
+  [ -t 1 ] || return 0
+  [ -f "$SPLASH_HELPER" ] || return 0
+  command -v node >/dev/null 2>&1 || return 0
+  RB_RALPH_SPLASH=1 node "$SPLASH_HELPER" --version "$RB_RALPH_VERSION" || true
+  export RB_RALPH_SPLASH_SHOWN=1
 }
 
 usage() {
@@ -137,8 +200,18 @@ usage() {
   cat <<'USAGE'
 Usage:
   rb-ralph [options]
+  rb-ralph --wizard
+  rb-ralph --login
+  rb-ralph provider list|test [options]
+  rb-ralph profile list|show <name>|delete <name>|path
 
 Quick start:
+  # Start the interactive command builder
+  rb-ralph
+
+  # Reuse a saved execution strategy; explicit flags override the profile
+  rb-ralph --profile my-team --project /path/to/project --plan <artifact-id>
+
   # Install for the current user, then ensure ~/.local/bin is on PATH
   ./rb-ralph.sh --install --prefix "$HOME/.local"
 
@@ -146,15 +219,18 @@ Quick start:
   rb-ralph --project /path/to/project --list
   rb-ralph --project /path/to/project --plan <artifact-id> --dry-run
 
+  # Consume plans generated by another compatible harness
+  rb-ralph --project /path/to/project --artifacts-dir .spec --list
+
   # Execute with Codex as executor and inherited manager
-  rb-ralph --project /path/to/project --plan <artifact-id> --provider codex --splash --dashboard
+  rb-ralph --project /path/to/project --plan <artifact-id> --provider codex --dashboard
 
   # Watch the newest observable run from another terminal
   rb-ralph-watch --project /path/to/project
 
   # Use a different manager explicitly
-  rb-ralph --project . --agent-provider claude --agent-model sonnet \
-    --manager-provider codex --manager-model gpt-5.6-sol
+  rb-ralph --project . --agent-provider claude --agent-model sonnet --agent-effort high \
+    --manager-provider codex --manager-model gpt-5.6-sol --manager-effort xhigh
 
   # Select different models exposed through OpenCode
   rb-ralph --project . --provider opencode \
@@ -162,6 +238,15 @@ Quick start:
 
   # Use one custom adapter command for both independent calls
   rb-ralph --project . --agent-cmd /path/to/adapter
+
+  # Configure and use native APIs without routing through another model CLI
+  rb-ralph --login
+  rb-ralph provider list
+  rb-ralph provider test
+  rb-ralph provider test --provider deepseek --model deepseek-v4-pro \
+    --credential pessoal
+  rb-ralph --project . --provider deepseek --model deepseek-v4-pro \
+    --credential pessoal --yolo --dashboard
 
 The executor is primary. Unless --manager-provider or --manager-cmd is given,
 the manager inherits the executor's provider/command and model configuration.
@@ -171,19 +256,32 @@ Token counts come from provider telemetry. Costs are provider-reported when
 available or estimated only with --pricing-file; unavailable values stay clear.
 RB Ralph defaults to YOLO: provider permission checks and sandboxes are bypassed.
 Use --protected explicitly when the project or machine is not fully trusted.
+CLI providers: codex, claude, opencode. Direct API providers: openai,
+anthropic, gemini, deepseek, minimax, openrouter. Direct API executors require
+an explicit model and --yolo; their managers remain read-only.
 
 Options:
+  --wizard              Start the interactive command builder
+  --login               Configure shared direct-API credentials interactively
+  --profile <name>       Load a built-in or user execution profile
   --project <path>       Project root (default: current directory)
   --plan <id-or-path>    Execution-plan artifact ID or manifest path
+  --artifacts-dir <dir>  Artifact/fragment root (default: .rb; alias: --fragments-dir)
   --core-cli <path>      RB Harness contract CLI (highest discovery precedence)
   --agent-cmd <command>  Executable that reads an implementation prompt on stdin
   --manager-cmd <cmd>    Executable that reads a review prompt on stdin
-  --provider <name>      Shared codex, claude, or opencode provider
-  --agent-provider <n>   Built-in codex, claude, or opencode executor
-  --manager-provider <n> Built-in codex, claude, or opencode manager
+  --provider <name>      Shared CLI or direct API provider
+  --agent-provider <n>   Executor provider (CLI or direct API)
+  --manager-provider <n> Manager provider (CLI or direct API)
   --model <id>           Shared model for executor and manager
   --agent-model <id>     Executor model; manager inherits with the same adapter
   --manager-model <id>   Explicit manager model override
+  --effort <level>       Shared reasoning effort for executor and manager
+  --agent-effort <level> Executor effort; manager inherits with the same adapter
+  --manager-effort <lvl> Explicit manager reasoning-effort override
+  --credential <ref>     Shared saved direct-API credential ID or label
+  --agent-credential <r> Executor saved credential override
+  --manager-credential <r> Manager saved credential override
   --max-attempts <n>     No-progress attempts before strategy recovery (default: 3)
   --max-total-attempts N Hard phase safety cap per invocation (default: 12; 0 disables)
   --max-strategy-resets N Recovery escalations before pausing (default: 1)
@@ -191,8 +289,17 @@ Options:
   --manager-retry-wait N Seconds between manager retries (default: 5)
   --agent-timeout <n>   Executor wall-clock limit in seconds (default: 3600; 0 disables)
   --agent-idle-timeout N Executor output-idle limit in seconds (default: 300; 0 disables)
+  --agent-first-output-timeout N Executor first-output limit (default: 300; 0 disables)
   --manager-timeout <n> Manager wall-clock limit in seconds (default: 900; 0 disables)
   --manager-idle-timeout N Manager output-idle limit in seconds (default: 180; 0 disables)
+  --manager-first-output-timeout N Manager first-output limit (default: 180; 0 disables)
+  --manager-audit <mode> exhaustive or legacy (default: exhaustive)
+  --manager-review <mode>
+                         delivery or code (default: delivery). delivery accepts
+                         a phase once the executor delivered what the fragment
+                         asked for; code also audits the changed source for
+                         defects the criteria did not name
+  --execution-unit <m>  task or phase; fresh call boundary (default: task)
   --validation-mode <m>  run or manager (default: run)
   --validation-timeout N Per-command timeout in seconds (default: 900; 0 disables)
   --parallel <n>         Maximum independent task agents (default: 1)
@@ -201,6 +308,10 @@ Options:
   --max-limit-waits <n>  Maximum provider-limit waits per phase (default: 20)
   --max-limit-wait <n>   Cap one provider-requested wait (default: 3600 seconds)
   --isolation <mode>     shared or worktree; parallel execution requires worktree
+  --no-agent-context     Do not pre-load task scope, phase context, and project
+                         tree into the executor prompt (it is on by default)
+  --agent-context-bytes <n>
+                         Byte budget for that pre-loaded context (default: 49152)
   --memory-url <url>     Optional RB Memory Streamable HTTP MCP URL
   --memory-mode <mode>   off, required, or best-effort (default: required with URL)
   --memory-token-env <n> Bearer-token environment variable (default: RB_MEMORY_TOKEN)
@@ -211,9 +322,10 @@ Options:
   --no-final-audit       Explicitly skip the final operational acceptance phase
   --yolo                 Bypass provider permissions/sandbox (default)
   --protected            Enable each provider's protected role defaults
-  --splash               Show the animated RB Ralph launch splash
-  --no-splash            Skip the launch splash (default)
+  --splash               Play the launch splash animation and exit
+  --no-splash            Skip the launch splash for this invocation
   --dashboard, --tui     Show the live terminal dashboard during execution
+  --no-dashboard         Disable a dashboard enabled by a profile
   --watch                Watch the latest run; equivalent to rb-ralph-watch
   --dry-run              Validate and show the selected phase schedule
   --list                 List ready execution plans and exit
@@ -221,15 +333,22 @@ Options:
   -h, --help             Show this help
 
 Environment equivalents:
-  RB_RALPH_HOME, RB_RALPH_CORE_CLI, RB_RALPH_AGENT_CMD, RB_RALPH_MANAGER_CMD,
+  RB_RALPH_HOME, RB_RALPH_CORE_CLI, RB_RALPH_ARTIFACTS_DIR,
+  RB_RALPH_PROFILES_FILE,
+  RB_RALPH_AGENT_CMD, RB_RALPH_MANAGER_CMD,
   RB_RALPH_AGENT_PROVIDER, RB_RALPH_MANAGER_PROVIDER,
   RB_RALPH_MODEL, RB_RALPH_AGENT_MODEL, RB_RALPH_MANAGER_MODEL,
+  RB_RALPH_EFFORT, RB_RALPH_AGENT_EFFORT, RB_RALPH_MANAGER_EFFORT,
+  RB_RALPH_CREDENTIAL, RB_RALPH_AGENT_CREDENTIAL, RB_RALPH_MANAGER_CREDENTIAL,
   RB_RALPH_MAX_ATTEMPTS, RB_RALPH_MAX_TOTAL_ATTEMPTS,
   RB_RALPH_MAX_STRATEGY_RESETS, RB_RALPH_MAX_MANAGER_RETRIES,
   RB_RALPH_MANAGER_RETRY_WAIT, RB_RALPH_MAX_INCOMPLETE_RETRIES,
   RB_RALPH_AGENT_TIMEOUT,
   RB_RALPH_AGENT_IDLE_TIMEOUT, RB_RALPH_MANAGER_TIMEOUT,
-  RB_RALPH_MANAGER_IDLE_TIMEOUT, RB_RALPH_VALIDATION_MODE,
+  RB_RALPH_AGENT_FIRST_OUTPUT_TIMEOUT, RB_RALPH_MANAGER_IDLE_TIMEOUT,
+  RB_RALPH_MANAGER_FIRST_OUTPUT_TIMEOUT, RB_RALPH_MANAGER_AUDIT_MODE,
+  RB_RALPH_MANAGER_REVIEW,
+  RB_RALPH_EXECUTION_UNIT, RB_RALPH_VALIDATION_MODE,
   RB_RALPH_VALIDATION_TIMEOUT, RB_RALPH_PARALLEL,
   RB_RALPH_MAX_PROMPT_BYTES, RB_RALPH_RATE_LIMIT_WAIT,
   RB_RALPH_MAX_RATE_LIMIT_WAITS, RB_RALPH_MAX_RATE_LIMIT_WAIT,
@@ -247,14 +366,19 @@ Provider command protocol:
   submission directory; orchestrator-owned logs under .rb/runs are never
   exposed as writable executor output.
   Every call receives RB_RALPH_TELEMETRY_FILE for an optional
-  rb-ralph-usage/v1 record, plus RB_RALPH_PERMISSION_MODE and RB_RALPH_YOLO.
+  rb-ralph-usage/v1 record, RB_RALPH_MODEL and RB_RALPH_EFFORT for the current
+  call, both resolved role model/effort values, plus RB_RALPH_PERMISSION_MODE
+  and RB_RALPH_YOLO.
   Custom adapters must honor protected mode or fail clearly if unsupported.
   Manager adapters also receive RB_RALPH_VALIDATION_LOG,
-  RB_RALPH_CHANGED_PATHS_FILE, RB_RALPH_AGENT_EXIT_CODE, and
+  RB_RALPH_EVIDENCE_INDEX, RB_RALPH_CHANGED_PATHS_FILE, RB_RALPH_AGENT_EXIT_CODE, and
   RB_RALPH_PHASE_TITLE. Custom manager adapters must have read access to the
   project and these evidence files.
 
 Manager output protocol:
+  RB_RALPH_AUDIT_STATUS: COMPLETE
+  RB_RALPH_CRITERION: <required-id> | <status> | <evidence>
+  RB_RALPH_FINDING: <criterion-ids> | <boundary> | <expected> | <observed> | <evidence>
   RB_RALPH_DECISION: COMPLETE | RETRY | BLOCKED
   RB_RALPH_REASON: <short reason>
 USAGE
@@ -399,10 +523,18 @@ resolve_core_cli() {
   CORE_CLI="$candidate"
 }
 
+is_direct_provider() {
+  case "$1" in
+    openai|anthropic|gemini|deepseek|minimax|openrouter) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 provider_command() {
   case "$1" in
     codex|claude|opencode) printf '%s/adapters/%s.sh\n' "$RB_RALPH_HOME" "$1" ;;
-    *) die "Unsupported provider '$1'; use codex, claude, opencode, or a custom adapter command" ;;
+    openai|anthropic|gemini|deepseek|minimax|openrouter) printf '%s/adapters/api.sh\n' "$RB_RALPH_HOME" ;;
+    *) die "Unsupported provider '$1'; use codex, claude, opencode, openai, anthropic, gemini, deepseek, minimax, openrouter, or a custom adapter command" ;;
   esac
 }
 
@@ -418,15 +550,71 @@ provider_configured_model() {
   esac
 }
 
+provider_configured_effort() {
+  local provider="$1" role="$2"
+  case "$provider:$role" in
+    codex:agent) printf '%s' "${RB_RALPH_CODEX_AGENT_EFFORT:-${RB_RALPH_CODEX_EFFORT:-}}" ;;
+    codex:manager) printf '%s' "${RB_RALPH_CODEX_MANAGER_EFFORT:-${RB_RALPH_CODEX_EFFORT:-}}" ;;
+    claude:agent) printf '%s' "${RB_RALPH_CLAUDE_AGENT_EFFORT:-${RB_RALPH_CLAUDE_EFFORT:-}}" ;;
+    claude:manager) printf '%s' "${RB_RALPH_CLAUDE_MANAGER_EFFORT:-${RB_RALPH_CLAUDE_EFFORT:-}}" ;;
+    opencode:agent) printf '%s' "${RB_RALPH_OPENCODE_AGENT_EFFORT:-${RB_RALPH_OPENCODE_EFFORT:-}}" ;;
+    opencode:manager) printf '%s' "${RB_RALPH_OPENCODE_MANAGER_EFFORT:-${RB_RALPH_OPENCODE_EFFORT:-}}" ;;
+  esac
+}
+
+validate_effort() {
+  local role="$1" value="$2"
+  [ -z "$value" ] || [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || \
+    die "$role effort must be a provider-supported token containing only letters, numbers, dot, underscore, or hyphen"
+}
+
 preflight_provider() {
   local provider="$1" role="$2" binary=""
   case "$provider" in
     codex) binary="${RB_RALPH_CODEX_BIN:-codex}" ;;
     claude) binary="${RB_RALPH_CLAUDE_BIN:-claude}" ;;
     opencode) binary="${RB_RALPH_OPENCODE_BIN:-opencode}" ;;
+    openai|anthropic|gemini|deepseek|minimax|openrouter)
+      [ -n "$CORE_CLI" ] || die "$role direct API provider requires the packaged RB Harness core"
+      return 0
+      ;;
     "") return 0 ;;
   esac
   resolve_command "$binary" "$role $provider CLI"
+}
+
+configure_credentials() {
+  local manager_explicit=0 same_adapter=0
+  AGENT_CREDENTIAL="$ENV_AGENT_CREDENTIAL"
+  MANAGER_CREDENTIAL="$ENV_MANAGER_CREDENTIAL"
+  [ -z "$MANAGER_CREDENTIAL" ] || manager_explicit=1
+  if [ -n "$ENV_SHARED_CREDENTIAL" ]; then
+    AGENT_CREDENTIAL="$ENV_SHARED_CREDENTIAL"
+    MANAGER_CREDENTIAL="$ENV_SHARED_CREDENTIAL"
+    manager_explicit=1
+  fi
+  if [ "$CLI_SHARED_CREDENTIAL_SET" -eq 1 ]; then
+    AGENT_CREDENTIAL="$CLI_SHARED_CREDENTIAL"
+    MANAGER_CREDENTIAL="$CLI_SHARED_CREDENTIAL"
+    manager_explicit=1
+  fi
+  [ "$CLI_AGENT_CREDENTIAL_SET" -eq 0 ] || AGENT_CREDENTIAL="$CLI_AGENT_CREDENTIAL"
+  if [ "$CLI_MANAGER_CREDENTIAL_SET" -eq 1 ]; then
+    MANAGER_CREDENTIAL="$CLI_MANAGER_CREDENTIAL"
+    manager_explicit=1
+  fi
+  if [ -n "$AGENT_PROVIDER" ] && [ "$AGENT_PROVIDER" = "$MANAGER_PROVIDER" ]; then
+    same_adapter=1
+  elif [ -z "$AGENT_PROVIDER" ] && [ -z "$MANAGER_PROVIDER" ] && [ "$AGENT_CMD" = "$MANAGER_CMD" ]; then
+    same_adapter=1
+  fi
+  if [ "$manager_explicit" -eq 0 ] && [ "$same_adapter" -eq 1 ]; then MANAGER_CREDENTIAL="$AGENT_CREDENTIAL"; fi
+  if ! is_direct_provider "$AGENT_PROVIDER" && [ -n "$AGENT_CREDENTIAL" ]; then
+    die "executor --credential is valid only with a direct API provider"
+  fi
+  if ! is_direct_provider "$MANAGER_PROVIDER" && [ -n "$MANAGER_CREDENTIAL" ]; then
+    die "manager --credential is valid only with a direct API provider"
+  fi
 }
 
 configure_models() {
@@ -464,6 +652,45 @@ configure_models() {
   if [ "$manager_explicit" -eq 0 ] && [ "$same_adapter" -eq 1 ]; then
     MANAGER_MODEL="$AGENT_MODEL"
   fi
+}
+
+configure_efforts() {
+  local manager_explicit=0 same_adapter=0
+  AGENT_EFFORT="$(provider_configured_effort "$AGENT_PROVIDER" agent)"
+  MANAGER_EFFORT="$(provider_configured_effort "$MANAGER_PROVIDER" manager)"
+  [ -z "$MANAGER_EFFORT" ] || manager_explicit=1
+
+  if [ -n "$ENV_SHARED_EFFORT" ]; then
+    AGENT_EFFORT="$ENV_SHARED_EFFORT"
+    MANAGER_EFFORT="$ENV_SHARED_EFFORT"
+    manager_explicit=1
+  fi
+  [ -z "$ENV_AGENT_EFFORT" ] || AGENT_EFFORT="$ENV_AGENT_EFFORT"
+  if [ -n "$ENV_MANAGER_EFFORT" ]; then
+    MANAGER_EFFORT="$ENV_MANAGER_EFFORT"
+    manager_explicit=1
+  fi
+  if [ "$CLI_SHARED_EFFORT_SET" -eq 1 ]; then
+    AGENT_EFFORT="$CLI_SHARED_EFFORT"
+    MANAGER_EFFORT="$CLI_SHARED_EFFORT"
+    manager_explicit=1
+  fi
+  [ "$CLI_AGENT_EFFORT_SET" -eq 0 ] || AGENT_EFFORT="$CLI_AGENT_EFFORT"
+  if [ "$CLI_MANAGER_EFFORT_SET" -eq 1 ]; then
+    MANAGER_EFFORT="$CLI_MANAGER_EFFORT"
+    manager_explicit=1
+  fi
+
+  if [ -n "$AGENT_PROVIDER" ] && [ "$AGENT_PROVIDER" = "$MANAGER_PROVIDER" ]; then
+    same_adapter=1
+  elif [ -z "$AGENT_PROVIDER" ] && [ -z "$MANAGER_PROVIDER" ] && [ "$AGENT_CMD" = "$MANAGER_CMD" ]; then
+    same_adapter=1
+  fi
+  if [ "$manager_explicit" -eq 0 ] && [ "$same_adapter" -eq 1 ]; then
+    MANAGER_EFFORT="$AGENT_EFFORT"
+  fi
+  validate_effort executor "$AGENT_EFFORT"
+  validate_effort manager "$MANAGER_EFFORT"
 }
 
 configure_roles() {
@@ -526,6 +753,17 @@ configure_roles() {
   resolve_command "$AGENT_CMD" "agent command"
   resolve_command "$MANAGER_CMD" "manager command"
   configure_models
+  configure_efforts
+  configure_credentials
+  if is_direct_provider "$AGENT_PROVIDER" && [ -z "$AGENT_MODEL" ]; then
+    die "direct API executor $AGENT_PROVIDER requires --agent-model or --model"
+  fi
+  if is_direct_provider "$MANAGER_PROVIDER" && [ -z "$MANAGER_MODEL" ]; then
+    die "direct API manager $MANAGER_PROVIDER requires --manager-model or --model"
+  fi
+  if is_direct_provider "$AGENT_PROVIDER" && [ "$PERMISSION_MODE" = "protected" ]; then
+    die "direct API executors cannot provide an OS sandbox in --protected mode; use --yolo or a sandboxed codex/claude/opencode CLI provider"
+  fi
   preflight_provider "$AGENT_PROVIDER" executor
   preflight_provider "$MANAGER_PROVIDER" manager
 }
@@ -538,19 +776,49 @@ record_event() {
 }
 
 record_finding() {
-  local phase="$1" attempt="$2" reason="$3" fingerprint="$4" finding_id
+  local phase="$1" attempt="$2" reason="$3" fingerprint="$4" finding_id suffix=1 base_id
   reason="${reason//$'\t'/ }"
   reason="${reason//$'\n'/ }"
-  finding_id="F-${phase}-A$(printf '%03d' "$attempt")"
-  printf '%s\t%s\t%s\topen\t%s\t%s\t\t\n' \
-    "$finding_id" "$phase" "$attempt" "$reason" "$fingerprint" >> "$FINDINGS_FILE"
+  if awk -F '\t' -v phase="$phase" -v reason="$reason" \
+    '$2 == phase && $4 == "open" && $5 == reason { found=1 } END { exit(found ? 0 : 1) }' \
+    "$FINDINGS_FILE"; then
+    return 0
+  fi
+  base_id="F-${phase}-A$(printf '%03d' "$attempt")"
+  finding_id="$base_id"
+  while grep -Fq "${finding_id}"$'\t' "$FINDINGS_FILE"; do
+    suffix=$((suffix + 1))
+    finding_id="${base_id}-$(printf '%02d' "$suffix")"
+  done
+  printf '%s\t%s\t%s\topen\t%s\t%s\t\t\t\t\t%s\t%s\t%s\n' \
+    "$finding_id" "$phase" "$attempt" "$reason" "$fingerprint" \
+    "$reason" "$fingerprint" "$attempt" >> "$FINDINGS_FILE"
+}
+
+record_manager_findings() {
+  local phase="$1" attempt="$2" report="$3" evidence_fingerprint="$4" fallback="$5"
+  local report_decision=""
+  if [ -s "$report" ]; then
+    report_decision="$(node -e 'const r=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(r.decision??"")' "$report")"
+  fi
+  if [ "$report_decision" = "RETRY" ]; then
+    node "$MANAGER_AUDIT_HELPER" reconcile "$FINDINGS_FILE" "$report" \
+      "$phase" "$attempt" "$evidence_fingerprint" >/dev/null \
+      || die "$phase could not reconcile the exhaustive manager finding batch"
+  else
+    record_finding "$phase" "$attempt" "$fallback" "$evidence_fingerprint"
+  fi
 }
 
 open_findings() {
   local phase="$1"
   [ -f "$FINDINGS_FILE" ] || return 0
   awk -F '\t' -v phase="$phase" \
-    '$2 == phase && $4 == "open" { printf "- %s (attempt %s): %s\n", $1, $3, $5 }' \
+    '$2 == phase && $4 == "open" {
+      latest=($13 == "" ? $3 : $13); reason=($11 == "" ? $5 : $11)
+      if (latest == $3) printf "- %s (attempt %s): %s\n", $1, $3, reason
+      else printf "- %s (attempt %s, last seen %s): %s\n", $1, $3, latest, reason
+    }' \
     "$FINDINGS_FILE"
 }
 
@@ -599,7 +867,7 @@ open_finding_has_same_evidence() {
 manager_failure_summary() {
   local log_file="$1" exit_code="$2" provider="$3" model="$4"
   local label log_reference go_model
-  label="$(dashboard_role_label "$provider" "$MANAGER_CMD" "$model")"
+  label="$(dashboard_role_label "$provider" "$MANAGER_CMD" "$model" "$MANAGER_EFFORT")"
   log_reference="${log_file#"$PROJECT/"}"
 
   if grep -Fq 'RB_RALPH_PROCESS_STATUS: TIMEOUT' "$log_file"; then
@@ -647,10 +915,26 @@ last_phase_reason() {
 
 next_phase_attempt() {
   local phase="$1"
-  awk -F '\t' -v phase="$phase" '
-    $2 == phase && $3 ~ /^[0-9]+$/ { if (($3 + 0) > maximum) maximum=$3 + 0 }
-    END { print maximum + 1 }
-  ' "$EVENTS_FILE"
+  node -e '
+    const fs=require("node:fs"), path=require("node:path");
+    const [eventsPath,stateDirectory,phase]=process.argv.slice(1);
+    let maximum=0;
+    for (const line of fs.readFileSync(eventsPath,"utf8").split(/\r?\n/)) {
+      const fields=line.split("\t");
+      if (fields[1] === phase && /^\d+$/.test(fields[2] ?? "")) maximum=Math.max(maximum,Number(fields[2]));
+    }
+    const escaped=phase.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+    const pattern=new RegExp(`^${escaped}(?:-.+)?-attempt-(\\d+)(?:-|\\.)`);
+    for (const directory of ["prompts","logs","evidence"]) {
+      let names=[];
+      try { names=fs.readdirSync(path.join(stateDirectory,directory)); } catch {}
+      for (const name of names) {
+        const match=pattern.exec(name);
+        if (match) maximum=Math.max(maximum,Number(match[1]));
+      }
+    }
+    process.stdout.write(String(maximum+1));
+  ' "$EVENTS_FILE" "$STATE_DIR" "$phase"
 }
 
 last_phase_retry_reason() {
@@ -704,6 +988,29 @@ manager_failure_is_transient() {
     "$path"
 }
 
+record_context_compaction_signal() {
+  local path="$1" role="$2" current_phase="$3" current_attempt="$4"
+  [ -f "$path" ] || return 0
+  if grep -Eiq 'context[_ .-]?compact(ed|ion)|compacting context' "$path"; then
+    record_event "$current_phase" "$current_attempt" "CONTEXT_COMPACTION" \
+      "$role provider reported context compaction; correctness remains bound to deterministic artifacts"
+    log "$current_phase $role context-compaction signal observed in ${path#"$PROJECT/"}"
+  fi
+}
+
+manager_finding_batch_fingerprint() {
+  local report="$1"
+  [ -f "$report" ] || return 0
+  node -e '
+    const fs = require("node:fs");
+    const crypto = require("node:crypto");
+    let value;
+    try { value = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch { process.exit(0); }
+    const keys = (value.findings ?? []).map((finding) => String(finding.key ?? "")).filter(Boolean).sort();
+    if (keys.length) process.stdout.write(crypto.createHash("sha256").update(JSON.stringify(keys)).digest("hex"));
+  ' "$report"
+}
+
 write_agent_prompt() {
   local output="$1" content="$2" task_id="$3" execution_root="$4"
   {
@@ -714,15 +1021,20 @@ write_agent_prompt() {
       "$attempt" "$stalled_attempts" "$MAX_ATTEMPTS" \
       "$(if [ "$MAX_TOTAL_ATTEMPTS" -eq 0 ]; then printf unlimited; else printf '%s' "$MAX_TOTAL_ATTEMPTS"; fi)"
     if [ -n "$task_id" ]; then
-      printf '%s\n' 'Implement only the independent task below. Read every referenced context file from the project.'
+      printf '%s\n' 'Implement only the task below in this fresh execution context. The validated task extract is the work-item authority.'
     else
-      printf '%s\n' 'Implement only the phase below. Read every referenced context file from the project.'
+      printf '%s\n' 'Implement only the phase below in this fresh execution context. The validated phase extract is the work-item authority.'
     fi
     printf '%s\n' \
+      'Open referenced context or raw evidence only for a concrete unresolved criterion. Prefer exact files and relevant sections; do not reread whole plans, transcripts, or successful logs by default.' \
+      'Authority order is: validated work-item extract, current repository state, canonical validation/evidence files, then advisory memory or prior narrative.' \
       'Respect existing code and tests. Re-check existing work before editing so retries remain idempotent.' \
       'Do not alter RB contracts or claim completion without evidence.' \
+      "Treat $ARTIFACTS_RELATIVE as read-only planning input; never edit generated specifications or fragments during implementation." \
       'Never create or modify .rb/runs; it is orchestrator-owned control-plane state. Put optional evidence files only in RB_RALPH_AGENT_EVIDENCE_DIR.' \
       'Return a concise summary of changes, validations, failures, and remaining risks.' \
+      'Repair the invariant behind manager feedback, not only its quoted reproduction. Add positive and negative equivalence coverage when one semantic rule produced several examples.' \
+      'If a requested deterministic mechanism would need to interpret unbounded natural language without a typed field, exact grammar, finite matrix, or declared classifier contract, do not grow a keyword denylist. State the missing authority precisely so the independent manager can classify the plan as unsafe ambiguity.' \
       'End a genuinely completed final response with the exact line RB_RALPH_EXECUTOR_STATUS: COMPLETE. Do not emit it after an interrupted tool call or partial turn.'
     if [ -n "$LAST_FEEDBACK" ]; then
       printf '\nPREVIOUS_MANAGER_FEEDBACK: %s\n' "$LAST_FEEDBACK"
@@ -747,19 +1059,33 @@ write_agent_prompt() {
     fi
     printf '%s\n' '' '--- VALIDATED WORK ITEM ---'
     cat "$content"
+    # The orchestrator already resolved the task scope, the phase context, the
+    # project tree, and what earlier tasks changed. Handing that over turns the
+    # agent's first several rediscovery turns into zero.
+    if [ "${AGENT_CONTEXT:-1}" != "0" ] && [ -n "$task_id" ]; then
+      node "$AGENT_CONTEXT_HELPER" \
+        --root "$execution_root" \
+        --tasks "${TASK_DETAILS_FILE:-}" \
+        --task "$task_id" \
+        --changes "${CHANGED_PATHS_FILE:-}" \
+        --before "${BEFORE_SNAPSHOT:-}" \
+        --phase-file "$content" \
+        --max-bytes "${AGENT_CONTEXT_BYTES:-49152}" 2>/dev/null || true
+    fi
   } > "$output"
 }
 
 invoke_agent() {
   local prompt="$1" output="$2" task_id="$3" execution_root="$4" telemetry
-  local capture_root provider_output submission_dir submission_target temporary_output temporary_telemetry agent_result=0
+  local capture_root provider_output submission_dir submission_target temporary_output temporary_telemetry live_status agent_result=0
   telemetry="$USAGE_DIR/$(basename "${output%.log}").usage.json"
   capture_root="$(mktemp -d "${TMPDIR:-/tmp}/rb-ralph-agent-capture.XXXXXX")"
   provider_output="$capture_root/provider.log"
   submission_dir="$capture_root/submission"
   temporary_telemetry="$capture_root/usage.json"
+  live_status="$LOCK_DIR/live/$(basename "${output%.log}").json"
   mkdir -p "$submission_dir"
-  usage_placeholder "$temporary_telemetry" "${AGENT_PROVIDER:-custom}" agent "$task_id" "$AGENT_MODEL"
+  usage_placeholder "$temporary_telemetry" "${AGENT_PROVIDER:-custom}" agent "$task_id" "$AGENT_MODEL" "$AGENT_EFFORT"
   if (
     cd "$execution_root"
     RB_RALPH_ROLE="agent" \
@@ -771,14 +1097,22 @@ invoke_agent() {
     RB_RALPH_ATTEMPT="$attempt" \
     RB_RALPH_AGENT_EVIDENCE_DIR="$submission_dir" \
     RB_RALPH_TELEMETRY_FILE="$temporary_telemetry" \
+    RB_RALPH_DIRECT_API_CORE="$CORE_CLI" \
+    RB_RALPH_PROVIDER="$AGENT_PROVIDER" \
+    RB_RALPH_CREDENTIAL="$AGENT_CREDENTIAL" \
+    RB_RALPH_ARTIFACTS_DIR="$ARTIFACTS_RELATIVE" \
     RB_RALPH_MODEL="$AGENT_MODEL" \
     RB_RALPH_AGENT_MODEL="$AGENT_MODEL" \
     RB_RALPH_MANAGER_MODEL="$MANAGER_MODEL" \
+    RB_RALPH_EFFORT="$AGENT_EFFORT" \
+    RB_RALPH_AGENT_EFFORT="$AGENT_EFFORT" \
+    RB_RALPH_MANAGER_EFFORT="$MANAGER_EFFORT" \
     RB_RALPH_PERMISSION_MODE="$PERMISSION_MODE" \
     RB_RALPH_YOLO="$(if [ "$PERMISSION_MODE" = yolo ]; then printf 1; else printf 0; fi)" \
     node "$PROCESS_SUPERVISOR" \
       --input "$prompt" --output "$provider_output" \
-      --idle-timeout "$AGENT_IDLE_TIMEOUT" --timeout "$AGENT_TIMEOUT" \
+      --idle-timeout "$AGENT_IDLE_TIMEOUT" --first-output-timeout "$AGENT_FIRST_OUTPUT_TIMEOUT" \
+      --timeout "$AGENT_TIMEOUT" --status "$live_status" \
       --label executor -- "$AGENT_CMD"
   ); then
     agent_result=0
@@ -789,6 +1123,16 @@ invoke_agent() {
   cp -- "$provider_output" "$temporary_output"
   chmod 600 "$temporary_output"
   mv "$temporary_output" "$output"
+  # Tokens alone hide the shape of a call: a task at 1.5M input tokens may be
+  # genuinely large, or an agent looping on rediscovery. The command count is
+  # what separates them, so record it beside the run instead of leaving it
+  # buried in a megabyte of provider log.
+  # One file per call, like usage/: a shared append-only file would be modified
+  # after the control-plane snapshot on a provider-availability retry, and the
+  # orchestrator would then read its own bookkeeping as forged prior evidence.
+  mkdir -p "$STATE_DIR/activity"
+  node "$AGENT_ACTIVITY_HELPER" "$output" "$phase_id/${task_id:-phase}-attempt-$attempt" \
+    "$STATE_DIR/activity/$(basename "${output%.log}").tsv" 2>/dev/null || true
   if [ -f "$temporary_telemetry" ]; then
     mkdir -p "$(dirname "$telemetry")"
     mv "$temporary_telemetry" "$telemetry"
@@ -806,11 +1150,12 @@ invoke_agent() {
 
 invoke_manager() {
   local prompt="$1" output="$2" telemetry="$3"
-  local capture_root provider_output temporary_output temporary_telemetry manager_result=0
+  local capture_root provider_output temporary_output temporary_telemetry live_status manager_result=0
   capture_root="$(mktemp -d "${TMPDIR:-/tmp}/rb-ralph-manager-capture.XXXXXX")"
   provider_output="$capture_root/provider.log"
   temporary_telemetry="$capture_root/usage.json"
-  usage_placeholder "$temporary_telemetry" "${MANAGER_PROVIDER:-custom}" manager "" "$MANAGER_MODEL"
+  live_status="$LOCK_DIR/live/$(basename "${output%.log}").json"
+  usage_placeholder "$temporary_telemetry" "${MANAGER_PROVIDER:-custom}" manager "" "$MANAGER_MODEL" "$MANAGER_EFFORT"
   if (
     cd "$PROJECT"
     RB_RALPH_ROLE="manager" \
@@ -823,17 +1168,26 @@ invoke_manager() {
     RB_RALPH_MANAGER_RETRY="$manager_try" \
     RB_RALPH_AGENT_LOG="$AGENT_LOG" \
     RB_RALPH_VALIDATION_LOG="$VALIDATION_LOG" \
+    RB_RALPH_EVIDENCE_INDEX="$EVIDENCE_INDEX_FILE" \
     RB_RALPH_CHANGED_PATHS_FILE="$CHANGED_PATHS_FILE" \
     RB_RALPH_AGENT_EXIT_CODE="$agent_rc" \
     RB_RALPH_TELEMETRY_FILE="$temporary_telemetry" \
+    RB_RALPH_DIRECT_API_CORE="$CORE_CLI" \
+    RB_RALPH_PROVIDER="$MANAGER_PROVIDER" \
+    RB_RALPH_CREDENTIAL="$MANAGER_CREDENTIAL" \
+    RB_RALPH_ARTIFACTS_DIR="$ARTIFACTS_RELATIVE" \
     RB_RALPH_MODEL="$MANAGER_MODEL" \
     RB_RALPH_AGENT_MODEL="$AGENT_MODEL" \
     RB_RALPH_MANAGER_MODEL="$MANAGER_MODEL" \
+    RB_RALPH_EFFORT="$MANAGER_EFFORT" \
+    RB_RALPH_AGENT_EFFORT="$AGENT_EFFORT" \
+    RB_RALPH_MANAGER_EFFORT="$MANAGER_EFFORT" \
     RB_RALPH_PERMISSION_MODE="$PERMISSION_MODE" \
     RB_RALPH_YOLO="$(if [ "$PERMISSION_MODE" = yolo ]; then printf 1; else printf 0; fi)" \
     node "$PROCESS_SUPERVISOR" \
       --input "$prompt" --output "$provider_output" \
-      --idle-timeout "$MANAGER_IDLE_TIMEOUT" --timeout "$MANAGER_TIMEOUT" \
+      --idle-timeout "$MANAGER_IDLE_TIMEOUT" --first-output-timeout "$MANAGER_FIRST_OUTPUT_TIMEOUT" \
+      --timeout "$MANAGER_TIMEOUT" --status "$live_status" \
       --label manager -- "$MANAGER_CMD"
   ); then
     manager_result=0
@@ -863,6 +1217,9 @@ git_snapshot_commit() {
   if [ -d "$PROJECT/.rb" ]; then
     GIT_INDEX_FILE="$index_file" git -C "$PROJECT" add -f -A -- .rb ':(exclude).rb/runs'
   fi
+  if [ "$ARTIFACTS_RELATIVE" != ".rb" ]; then
+    GIT_INDEX_FILE="$index_file" git -C "$PROJECT" add -f -A -- "$ARTIFACTS_RELATIVE"
+  fi
   tree="$(GIT_INDEX_FILE="$index_file" git -C "$PROJECT" write-tree)"
   commit="$(
     printf 'RB Ralph execution snapshot\n' | \
@@ -889,14 +1246,44 @@ dashboard_clean() {
 }
 
 dashboard_role_label() {
-  local provider="$1" command="$2" model="${3:-}" label
+  local provider="$1" command="$2" model="${3:-}" effort="${4:-}" label details=""
   if [ -n "$provider" ]; then label="$provider"; else label="$(basename "$command")"; fi
-  if [ -n "$model" ]; then printf '%s[%s]' "$label" "$model"; else printf '%s' "$label"; fi
+  if [ -n "$model" ]; then details="$model"; fi
+  if [ -n "$effort" ]; then
+    [ -z "$details" ] || details+="; "
+    details+="effort=$effort"
+  fi
+  if [ -n "$details" ]; then printf '%s[%s]' "$label" "$details"; else printf '%s' "$label"; fi
+}
+
+dashboard_find_phase_index() {
+  local requested_id="$1" index
+  DASHBOARD_PHASE_INDEX=-1
+  index=0
+  while [ "$index" -lt "${#DASHBOARD_PHASE_IDS[@]}" ]; do
+    if [ "${DASHBOARD_PHASE_IDS[$index]}" = "$requested_id" ]; then
+      DASHBOARD_PHASE_INDEX="$index"
+      return 0
+    fi
+    index=$((index + 1))
+  done
+  return 1
+}
+
+dashboard_ensure_phase_index() {
+  local requested_id="$1" index
+  if dashboard_find_phase_index "$requested_id"; then return 0; fi
+  index="${#DASHBOARD_PHASE_IDS[@]}"
+  DASHBOARD_PHASE_IDS[$index]="$requested_id"
+  DASHBOARD_PHASE_STATUS[$index]="pending"
+  DASHBOARD_PHASE_ATTEMPT[$index]="0"
+  DASHBOARD_PHASE_GATES[$index]="pending pending pending pending"
+  DASHBOARD_PHASE_INDEX="$index"
 }
 
 dashboard_write_live() {
   [ -n "${DASHBOARD_LIVE_FILE:-}" ] || return 0
-  local temporary="$DASHBOARD_LIVE_FILE.tmp.$$" id
+  local temporary="$DASHBOARD_LIVE_FILE.tmp.$$" id index
   {
     printf 'META\tstatus\t%s\n' "$DASHBOARD_STATUS"
     printf 'META\texecution_id\t%s\n' "$DASHBOARD_EXECUTION_ID"
@@ -907,12 +1294,26 @@ dashboard_write_live() {
     printf 'META\tattempt\t%s\n' "$(dashboard_clean "$DASHBOARD_ATTEMPT")"
     printf 'META\tactivity\t%s\n' "$(dashboard_clean "$DASHBOARD_ACTIVITY")"
     printf 'META\treason\t%s\n' "$(dashboard_clean "$DASHBOARD_REASON")"
-    for id in "${!DASHBOARD_PHASE_STATUS[@]}"; do
-      printf 'PHASE\t%s\t%s\t%s\t%s\n' "$id" "${DASHBOARD_PHASE_STATUS[$id]}" \
-        "${DASHBOARD_PHASE_ATTEMPT[$id]:-0}" "${DASHBOARD_PHASE_GATES[$id]:-pending pending pending pending}"
+    printf 'META\tfindings\t%s\n' "$(dashboard_clean "$DASHBOARD_FINDINGS")"
+    index=0
+    while [ "$index" -lt "${#DASHBOARD_PHASE_IDS[@]}" ]; do
+      id="${DASHBOARD_PHASE_IDS[$index]}"
+      printf 'PHASE\t%s\t%s\t%s\t%s\n' "$id" "${DASHBOARD_PHASE_STATUS[$index]}" \
+        "${DASHBOARD_PHASE_ATTEMPT[$index]:-0}" "${DASHBOARD_PHASE_GATES[$index]:-pending pending pending pending}"
+      index=$((index + 1))
     done
   } > "$temporary"
   mv "$temporary" "$DASHBOARD_LIVE_FILE"
+}
+
+dashboard_refresh_findings() {
+  [ -f "${FINDINGS_FILE:-}" ] || return 0
+  DASHBOARD_FINDINGS="$(awk -F '\t' -v phase="${phase_id:-}" -v attempt="${attempt:-0}" '
+    NR == 1 || (phase != "" && $2 != phase) { next }
+    { total += 1; if ($4 == "open") open += 1; if ($4 == "resolved") resolved += 1; if ($3 == attempt) fresh += 1 }
+    END { printf "total=%d open=%d resolved=%d new=%d", total, open, resolved, fresh }
+  ' "$FINDINGS_FILE")"
+  dashboard_write_live
 }
 
 refresh_usage_summary() {
@@ -923,10 +1324,10 @@ refresh_usage_summary() {
 }
 
 usage_placeholder() {
-  local path="$1" provider="$2" role="$3" task_id="${4:-}" model="${5:-unknown}"
+  local path="$1" provider="$2" role="$3" task_id="${4:-}" model="${5:-unknown}" effort="${6:-default}"
   RB_RALPH_ROLE="$role" RB_RALPH_PHASE_ID="$phase_id" RB_RALPH_TASK_ID="$task_id" \
     RB_RALPH_ATTEMPT="$attempt" \
-    node "$TELEMETRY_HELPER" placeholder "$path" "${provider:-custom}" "${model:-unknown}"
+    node "$TELEMETRY_HELPER" placeholder "$path" "${provider:-custom}" "${model:-unknown}" "${effort:-default}"
 }
 
 dashboard_state_init() {
@@ -940,17 +1341,19 @@ dashboard_state_init() {
   mkdir -p "$USAGE_DIR"
   local temporary="$DASHBOARD_PLAN_FILE.tmp.$$" row task_row
   local dash_phase_id dash_number dash_task_count dash_pending dash_depends dash_title
-  local dash_task_id dash_done dash_parallel dash_task_depends dash_task_title dash_status
+  local dash_task_id dash_done dash_parallel dash_task_depends dash_task_title dash_status dash_index
   {
     printf 'META\tplan\t%s\n' "$(dashboard_clean "$PLAN_ID")"
     printf 'META\tproject\t%s\n' "$(dashboard_clean "$(basename "$PROJECT")")"
     printf 'META\tversion\t%s\n' "$(dashboard_clean "$RB_RALPH_VERSION")"
     printf 'META\texecution_id\t%s\n' "$DASHBOARD_EXECUTION_ID"
     printf 'META\troles\t%s executor / %s manager\n' \
-      "$(dashboard_role_label "$AGENT_PROVIDER" "$AGENT_CMD" "$AGENT_MODEL")" \
-      "$(dashboard_role_label "$MANAGER_PROVIDER" "$MANAGER_CMD" "$MANAGER_MODEL")"
+      "$(dashboard_role_label "$AGENT_PROVIDER" "$AGENT_CMD" "$AGENT_MODEL" "$AGENT_EFFORT")" \
+      "$(dashboard_role_label "$MANAGER_PROVIDER" "$MANAGER_CMD" "$MANAGER_MODEL" "$MANAGER_EFFORT")"
     printf 'META\tagent_model\t%s\n' "$(dashboard_clean "$AGENT_MODEL")"
     printf 'META\tmanager_model\t%s\n' "$(dashboard_clean "$MANAGER_MODEL")"
+    printf 'META\tagent_effort\t%s\n' "$(dashboard_clean "$AGENT_EFFORT")"
+    printf 'META\tmanager_effort\t%s\n' "$(dashboard_clean "$MANAGER_EFFORT")"
     printf 'META\tpermissions\t%s\n' "$PERMISSION_MODE"
     printf 'META\tagent_idle_timeout\t%s\n' "$AGENT_IDLE_TIMEOUT"
     printf 'META\tmanager_idle_timeout\t%s\n' "$MANAGER_IDLE_TIMEOUT"
@@ -959,12 +1362,14 @@ dashboard_state_init() {
         <<< "${row//$'\t'/$TSV_SEPARATOR}"
       [ "$dash_phase_id" = "phase_id" ] && continue
       if [ "$dash_pending" -eq 0 ]; then dash_status="document-complete"; else dash_status="pending"; fi
-      DASHBOARD_PHASE_STATUS["$dash_phase_id"]="$dash_status"
-      DASHBOARD_PHASE_ATTEMPT["$dash_phase_id"]="0"
+      dash_index="${#DASHBOARD_PHASE_IDS[@]}"
+      DASHBOARD_PHASE_IDS[$dash_index]="$dash_phase_id"
+      DASHBOARD_PHASE_STATUS[$dash_index]="$dash_status"
+      DASHBOARD_PHASE_ATTEMPT[$dash_index]="0"
       if [ "$dash_status" = "document-complete" ]; then
-        DASHBOARD_PHASE_GATES["$dash_phase_id"]="skip skip skip skip"
+        DASHBOARD_PHASE_GATES[$dash_index]="skip skip skip skip"
       else
-        DASHBOARD_PHASE_GATES["$dash_phase_id"]="pending pending pending pending"
+        DASHBOARD_PHASE_GATES[$dash_index]="pending pending pending pending"
       fi
       printf 'PHASE\t%s\t%s\t%s\n' "$dash_phase_id" "$dash_status" "$(dashboard_clean "$dash_title")"
       if [ "$dash_phase_id" = "$FINAL_PHASE_ID" ]; then
@@ -992,11 +1397,13 @@ dashboard_state_init() {
 }
 
 dashboard_set_phase() {
-  local id="$1" status="$2" activity="$3" attempt_value="${4:-}"
-  DASHBOARD_PHASE_STATUS["$id"]="$status"
+  local id="$1" status="$2" activity="$3" attempt_value="${4:-}" phase_index
+  dashboard_ensure_phase_index "$id"
+  phase_index="$DASHBOARD_PHASE_INDEX"
+  DASHBOARD_PHASE_STATUS[$phase_index]="$status"
   DASHBOARD_PHASE="$id"
   DASHBOARD_ATTEMPT="$attempt_value"
-  [ -z "$attempt_value" ] || DASHBOARD_PHASE_ATTEMPT["$id"]="$attempt_value"
+  [ -z "$attempt_value" ] || DASHBOARD_PHASE_ATTEMPT[$phase_index]="$attempt_value"
   DASHBOARD_ACTIVITY="$activity"
   case "$status" in
     blocked|failed|paused|retry) DASHBOARD_REASON="$activity" ;;
@@ -1006,17 +1413,21 @@ dashboard_set_phase() {
 }
 
 dashboard_reset_gates() {
-  local id="$1"
-  DASHBOARD_PHASE_GATES["$id"]="pending pending pending pending"
+  local id="$1" phase_index
+  dashboard_ensure_phase_index "$id"
+  phase_index="$DASHBOARD_PHASE_INDEX"
+  DASHBOARD_PHASE_GATES[$phase_index]="pending pending pending pending"
   dashboard_write_live
 }
 
 dashboard_gate() {
-  local id="$1" index="$2" value="$3" activity="${4:-}"
+  local id="$1" index="$2" value="$3" activity="${4:-}" phase_index
   local -a gates
-  read -r -a gates <<< "${DASHBOARD_PHASE_GATES[$id]:-pending pending pending pending}"
+  dashboard_ensure_phase_index "$id"
+  phase_index="$DASHBOARD_PHASE_INDEX"
+  read -r -a gates <<< "${DASHBOARD_PHASE_GATES[$phase_index]:-pending pending pending pending}"
   gates[$index]="$value"
-  DASHBOARD_PHASE_GATES["$id"]="${gates[*]}"
+  DASHBOARD_PHASE_GATES[$phase_index]="${gates[*]}"
   [ -z "$activity" ] || DASHBOARD_ACTIVITY="$activity"
   dashboard_write_live
 }
@@ -1075,30 +1486,155 @@ cleanup_attempt_worktrees() {
 
 cleanup_runtime() {
   local path root exit_code=$?
-  for path in "${ACTIVE_WORKTREES[@]}"; do
+  for path in "${ACTIVE_WORKTREES[@]+"${ACTIVE_WORKTREES[@]}"}"; do
     if [ -d "$path" ]; then
       git -C "$PROJECT" worktree remove --force "$path" >/dev/null 2>&1 || true
     fi
   done
-  for root in "${ACTIVE_TEMP_ROOTS[@]}"; do
+  for root in "${ACTIVE_TEMP_ROOTS[@]+"${ACTIVE_TEMP_ROOTS[@]}"}"; do
     case "$root" in
-      "${TMPDIR:-/tmp}"/rb-ralph-worktrees.*)
+      "${TMPDIR:-/tmp}"/rb-ralph-worktrees.*|"${TMPDIR:-/tmp}"/rb-ralph-fragments.*)
         [ ! -d "$root" ] || rm -rf -- "$root"
         ;;
     esac
   done
   if [ "${DASHBOARD_STATUS:-}" = "running" ]; then dashboard_finish failed || true; fi
   stop_dashboard
+  if [ -n "${LOCK_DIR:-}" ] && [ -d "$LOCK_DIR/live" ]; then
+    rm -f -- "$LOCK_DIR/live/"* 2>/dev/null || true
+    rmdir "$LOCK_DIR/live" 2>/dev/null || true
+  fi
+  [ -z "${LOCK_DIR:-}" ] || rm -f -- "$LOCK_DIR/owner.pid" 2>/dev/null || true
   [ -z "${LOCK_DIR:-}" ] || rmdir "$LOCK_DIR" 2>/dev/null || true
   return "$exit_code"
+}
+
+cleanup_discovery_temp() {
+  case "${DISCOVERY_TEMP_ROOT:-}" in
+    "${TMPDIR:-/tmp}"/rb-ralph-fragments.*)
+      [ ! -d "$DISCOVERY_TEMP_ROOT" ] || rm -rf -- "$DISCOVERY_TEMP_ROOT"
+      ;;
+  esac
+  DISCOVERY_TEMP_ROOT=""
+}
+
+pid_is_running() {
+  local pid="${1:-}"
+  case "$pid" in
+    ""|*[!0-9]*) return 1 ;;
+  esac
+  [ "$pid" != "$$" ] || return 1
+  kill -0 "$pid" 2>/dev/null
+}
+
+pid_is_ralph_owner() {
+  local pid="${1:-}" command
+  pid_is_running "$pid" || return 1
+  command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  case "$command" in
+    *rb-ralph*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+lock_has_active_process() {
+  local pid status_file state command
+  if [ -r "$LOCK_DIR/owner.pid" ]; then
+    IFS= read -r pid < "$LOCK_DIR/owner.pid" || true
+    pid_is_ralph_owner "$pid" && return 0
+  fi
+
+  if [ -r "$STATE_DIR/dashboard-live.tsv" ]; then
+    state="$(awk -F '\t' '$1 == "META" && $2 == "status" { value=$3 } END { print value }' "$STATE_DIR/dashboard-live.tsv")"
+    pid="$(awk -F '\t' '$1 == "META" && $2 == "pid" { value=$3 } END { print value }' "$STATE_DIR/dashboard-live.tsv")"
+    [ "$state" != "running" ] || ! pid_is_ralph_owner "$pid" || return 0
+  fi
+
+  for status_file in "$LOCK_DIR/live/"*.json; do
+    [ -f "$status_file" ] || continue
+    grep -Eq '"state":"(running|starting)"' "$status_file" || continue
+    pid="$(sed -n 's/.*"pid":\([0-9][0-9]*\).*/\1/p' "$status_file" | head -n 1)"
+    pid_is_running "$pid" && return 0
+  done
+
+  while IFS= read -r command; do
+    [ -n "$command" ] || continue
+    pid="${command%% *}"
+    command="${command#* }"
+    [ "$pid" != "$$" ] || continue
+    case "$command" in
+      *"$RUN_ID"*) pid_is_running "$pid" && return 0 ;;
+    esac
+  done <<EOF
+$(ps -ax -o pid= -o command= 2>/dev/null | sed 's/^[[:space:]]*//')
+EOF
+  return 1
+}
+
+discard_stale_lock_backup() {
+  local stale_lock="$1"
+  if [ -d "$stale_lock/live" ]; then
+    rm -f -- "$stale_lock/live/"* 2>/dev/null || true
+    rmdir "$stale_lock/live" 2>/dev/null || true
+  fi
+  rm -f -- "$stale_lock/owner.pid" 2>/dev/null || true
+  if ! rmdir "$stale_lock" 2>/dev/null; then
+    log "stale lock backup retained for inspection: ${stale_lock#"$PROJECT/"}"
+  fi
+}
+
+write_lock_owner() {
+  if ! printf '%s\n' "$$" > "$LOCK_DIR/owner.pid"; then
+    rmdir "$LOCK_DIR" 2>/dev/null || true
+    die "Could not record run lock owner: $RUN_ID"
+  fi
+}
+
+acquire_run_lock() {
+  local stale_lock
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    write_lock_owner
+    return 0
+  fi
+
+  # A competing invocation may have created the directory immediately before
+  # writing owner.pid. Give that narrow startup window one bounded recheck.
+  sleep 1
+  if lock_has_active_process; then
+    die "Run is already locked by an active process: $RUN_ID"
+  fi
+
+  stale_lock="$STATE_DIR/.lock.stale.$$"
+  [ ! -e "$stale_lock" ] || die "Could not quarantine stale run lock: $stale_lock already exists"
+  if ! mv -- "$LOCK_DIR" "$stale_lock" 2>/dev/null; then
+    die "Run lock changed while checking staleness; retry: $RUN_ID"
+  fi
+  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    die "Another process acquired the run while its stale lock was being recovered: $RUN_ID"
+  fi
+  write_lock_owner
+  discard_stale_lock_backup "$stale_lock"
+  log "recovered stale run lock with no active execution processes: $RUN_ID"
+}
+
+changes_touch_protected_artifacts() {
+  local changed_path
+  while IFS= read -r changed_path; do
+    case "$changed_path" in
+      .rb/*|"$ARTIFACTS_RELATIVE"/*) return 0 ;;
+    esac
+  done
+  return 1
 }
 
 integrate_worktree_changes() {
   local snapshot="$1" temp_root="$2" patch_dir="$3"
   shift 3
   local task_id task_root task_patch integration combined changed changed_path task_overlap
+  local changed_path_index changed_path_owner_index existing_owner
   local integration_failed=0
-  local -A changed_path_owner=()
+  local -a changed_paths=()
+  local -a changed_path_owners=()
   mkdir -p "$patch_dir"
   integration="$temp_root/integration"
   create_execution_worktree "$snapshot" "$integration"
@@ -1109,21 +1645,32 @@ integrate_worktree_changes() {
     shift 2
     git -C "$task_root" add -N -- . >/dev/null 2>&1 || true
     changed="$(git -C "$task_root" diff --name-only "$snapshot")"
-    if printf '%s\n' "$changed" | grep -Eq '^\.rb/'; then
-      printf 'Task %s attempted to modify protected .rb artifacts.\n' "$task_id" >> "$AGENT_LOG"
+    if changes_touch_protected_artifacts <<< "$changed"; then
+      printf 'Task %s attempted to modify protected planning artifacts or .rb runtime state.\n' "$task_id" >> "$AGENT_LOG"
       integration_failed=1
       continue
     fi
     task_overlap=0
     while IFS= read -r changed_path; do
       [ -n "$changed_path" ] || continue
-      if [ -n "${changed_path_owner[$changed_path]:-}" ]; then
+      existing_owner=""
+      changed_path_index=0
+      while [ "$changed_path_index" -lt "${#changed_paths[@]}" ]; do
+        if [ "${changed_paths[$changed_path_index]}" = "$changed_path" ]; then
+          existing_owner="${changed_path_owners[$changed_path_index]}"
+          break
+        fi
+        changed_path_index=$((changed_path_index + 1))
+      done
+      if [ -n "$existing_owner" ]; then
         printf 'Tasks %s and %s both modify %s; parallel path overlap is prohibited.\n' \
-          "${changed_path_owner[$changed_path]}" "$task_id" "$changed_path" >> "$AGENT_LOG"
+          "$existing_owner" "$task_id" "$changed_path" >> "$AGENT_LOG"
         integration_failed=1
         task_overlap=1
       else
-        changed_path_owner["$changed_path"]="$task_id"
+        changed_path_owner_index="${#changed_paths[@]}"
+        changed_paths[$changed_path_owner_index]="$changed_path"
+        changed_path_owners[$changed_path_owner_index]="$task_id"
       fi
     done <<< "$changed"
     task_patch="$patch_dir/$task_id.patch"
@@ -1158,8 +1705,8 @@ ensure_prompt_budget() {
 }
 
 provider_rate_limited() {
-  local path="$1" exit_code="$2"
-  [ "$exit_code" -eq 75 ] || grep -Fq 'RB_RALPH_PROVIDER_STATUS: RATE_LIMIT' "$path"
+  local exit_code="$2"
+  [ "$exit_code" -eq 75 ]
 }
 
 provider_wait_seconds() {
@@ -1172,6 +1719,475 @@ provider_wait_seconds() {
   printf '%s\n' "$requested"
 }
 
+reset_task_call_outputs() {
+  # The prompt is an output of the call, not durable prior evidence. It was
+  # once byte-stable, so rewriting it in place was invisible; now that it
+  # carries pre-loaded repository context it legitimately differs between two
+  # invocations of the same logical attempt, and leaving the stale one behind
+  # would make the control-plane snapshot read the orchestrator's own
+  # bookkeeping as forged evidence. This applies to a phase call as much as to
+  # a task call, so it runs before the execution-unit check.
+  rm -f -- "$AGENT_PROMPT" "$STATE_DIR/activity/$(basename "${AGENT_LOG%.log}").tsv"
+  [ "$EXECUTION_UNIT" = "task" ] || return 0
+  local current_task task_log task_usage task_submission task_prompt task_activity
+  rm -f -- "$AGENT_LOG"
+  for current_task in "${PENDING_TASK_IDS[@]+"${PENDING_TASK_IDS[@]}"}"; do
+    task_log="$STATE_DIR/logs/$phase_id-$current_task-attempt-$attempt-agent.log"
+    task_usage="$USAGE_DIR/$phase_id-$current_task-attempt-$attempt-agent.usage.json"
+    task_submission="$STATE_DIR/evidence/$phase_id-$current_task-attempt-$attempt-agent-submission"
+    # The prompt is an output of the call, not durable prior evidence. It was
+    # once byte-stable, so rewriting it in place was invisible; now that it
+    # carries pre-loaded repository context it legitimately differs between two
+    # reinvocations of the same logical attempt, and leaving the old one in
+    # place would make the control-plane snapshot read that as forged evidence.
+    task_prompt="$STATE_DIR/prompts/$phase_id-$current_task-attempt-$attempt-agent.txt"
+    task_activity="$STATE_DIR/activity/$phase_id-$current_task-attempt-$attempt-agent.tsv"
+    rm -f -- "$task_log" "$task_usage" "$task_prompt" "$task_activity"
+    [ ! -d "$task_submission" ] || rm -rf -- "$task_submission"
+  done
+}
+
+resolve_artifacts_directory() {
+  local candidate="$ARTIFACTS_DIR_INPUT"
+  [ -n "$candidate" ] || die "--artifacts-dir must not be empty"
+  if [[ "$candidate" != /* ]]; then candidate="$PROJECT/$candidate"; fi
+  [ -d "$candidate" ] || die "Artifact/fragment directory does not exist: $ARTIFACTS_DIR_INPUT"
+  [ ! -L "$candidate" ] || die "Artifact/fragment directory must not be a symbolic link: $ARTIFACTS_DIR_INPUT"
+  ARTIFACTS_DIR="$(cd "$candidate" && pwd -P)"
+  case "$ARTIFACTS_DIR" in
+    "$PROJECT") die "Artifact/fragment directory must be a child of the project, not the project root" ;;
+    "$PROJECT"/*) ;;
+    *) die "Artifact/fragment directory must be inside the project: $ARTIFACTS_DIR_INPUT" ;;
+  esac
+  ARTIFACTS_RELATIVE="${ARTIFACTS_DIR#"$PROJECT/"}"
+}
+
+physical_artifact_path() {
+  local logical_path="$1"
+  case "$logical_path" in
+    .rb/*) printf '%s/%s\n' "$ARTIFACTS_RELATIVE" "${logical_path#.rb/}" ;;
+    "$ARTIFACTS_RELATIVE"/*) printf '%s\n' "$logical_path" ;;
+    *) die "Artifact path escapes the selected artifact directory: $logical_path" ;;
+  esac
+}
+
+require_profile_helper() {
+  [ -f "$PROFILE_HELPER" ] || die "RB Ralph profile helper not found: $PROFILE_HELPER; reinstall the complete package"
+  command -v node >/dev/null 2>&1 || die "Node.js is required for RB Ralph profiles and the interactive wizard"
+}
+
+run_profile_command() {
+  require_profile_helper
+  local operation="${2:-list}"
+  case "$operation" in
+    list)
+      { [ "$#" -eq 1 ] || [ "$#" -eq 2 ]; } || die "Usage: rb-ralph profile list"
+      node "$PROFILE_HELPER" list
+      ;;
+    show|delete)
+      [ "$#" -eq 3 ] || die "Usage: rb-ralph profile $operation <name>"
+      node "$PROFILE_HELPER" "$operation" "$3"
+      ;;
+    path)
+      [ "$#" -eq 2 ] || die "Usage: rb-ralph profile path"
+      node "$PROFILE_HELPER" path
+      ;;
+    *) die "Unknown profile command: $operation (use list, show, delete, or path)" ;;
+  esac
+}
+
+PROFILE_LOADED_ARGS=()
+load_profile_arguments() {
+  local name="$1" output argument
+  require_profile_helper
+  if ! output="$(node "$PROFILE_HELPER" args "$name")"; then
+    die "Could not load RB Ralph profile '$name'"
+  fi
+  PROFILE_LOADED_ARGS=()
+  while IFS= read -r argument; do
+    [ -z "$argument" ] || PROFILE_LOADED_ARGS+=("$argument")
+  done <<< "$output"
+}
+
+argument_list_has() {
+  local wanted="$1" current
+  shift
+  for current in "$@"; do
+    [ "$current" != "$wanted" ] || return 0
+  done
+  return 1
+}
+
+expand_profile_arguments() {
+  local profile_name="" current profile_flag value index skip_value
+  local original_args=("$@") remaining_args=() merged_args=()
+  index=0
+  while [ "$index" -lt "${#original_args[@]}" ]; do
+    current="${original_args[$index]}"
+    if [ "$current" = "--profile" ]; then
+      [ $((index + 1)) -lt "${#original_args[@]}" ] || die "--profile requires a name"
+      [ -z "$profile_name" ] || die "--profile may only be provided once"
+      profile_name="${original_args[$((index + 1))]}"
+      index=$((index + 2))
+      continue
+    fi
+    remaining_args+=("$current")
+    index=$((index + 1))
+  done
+  [ -n "$profile_name" ] || { set -- "${remaining_args[@]}"; EXPANDED_ARGS=("$@"); return 0; }
+
+  load_profile_arguments "$profile_name"
+  index=0
+  while [ "$index" -lt "${#PROFILE_LOADED_ARGS[@]}" ]; do
+    profile_flag="${PROFILE_LOADED_ARGS[$index]}"
+    value=""
+    skip_value=0
+    case "$profile_flag" in
+      --final-audit|--no-final-audit|--dashboard|--no-dashboard|--yolo|--protected) ;;
+      *)
+        [ $((index + 1)) -lt "${#PROFILE_LOADED_ARGS[@]}" ] || die "Profile '$profile_name' emitted an incomplete option: $profile_flag"
+        value="${PROFILE_LOADED_ARGS[$((index + 1))]}"
+        skip_value=1
+        ;;
+    esac
+
+    case "$profile_flag" in
+      --agent-provider|--agent-cmd)
+        if argument_list_has --provider "${remaining_args[@]}" ||
+           argument_list_has --agent-provider "${remaining_args[@]}" ||
+           argument_list_has --agent-cmd "${remaining_args[@]}"; then
+          index=$((index + skip_value + 1)); continue
+        fi
+        ;;
+      --manager-provider|--manager-cmd)
+        if argument_list_has --provider "${remaining_args[@]}" ||
+           argument_list_has --manager-provider "${remaining_args[@]}" ||
+           argument_list_has --manager-cmd "${remaining_args[@]}"; then
+          index=$((index + skip_value + 1)); continue
+        fi
+        ;;
+      --agent-model)
+        if argument_list_has --model "${remaining_args[@]}" || argument_list_has --agent-model "${remaining_args[@]}"; then
+          index=$((index + skip_value + 1)); continue
+        fi
+        ;;
+      --manager-model)
+        if argument_list_has --model "${remaining_args[@]}" || argument_list_has --manager-model "${remaining_args[@]}"; then
+          index=$((index + skip_value + 1)); continue
+        fi
+        ;;
+      --agent-effort)
+        if argument_list_has --effort "${remaining_args[@]}" || argument_list_has --agent-effort "${remaining_args[@]}"; then
+          index=$((index + skip_value + 1)); continue
+        fi
+        ;;
+      --manager-effort)
+        if argument_list_has --effort "${remaining_args[@]}" || argument_list_has --manager-effort "${remaining_args[@]}"; then
+          index=$((index + skip_value + 1)); continue
+        fi
+        ;;
+      --agent-credential)
+        if argument_list_has --credential "${remaining_args[@]}" || argument_list_has --agent-credential "${remaining_args[@]}"; then
+          index=$((index + skip_value + 1)); continue
+        fi
+        ;;
+      --manager-credential)
+        if argument_list_has --credential "${remaining_args[@]}" || argument_list_has --manager-credential "${remaining_args[@]}"; then
+          index=$((index + skip_value + 1)); continue
+        fi
+        ;;
+    esac
+    merged_args+=("$profile_flag")
+    [ "$skip_value" -eq 0 ] || merged_args+=("$value")
+    index=$((index + skip_value + 1))
+  done
+  EXPANDED_ARGS=("${merged_args[@]}" "${remaining_args[@]}")
+}
+
+WIZARD_REPLY=""
+WIZARD_PROFILE_ARGS=()
+WIZARD_RUN_ARGS=()
+
+wizard_read() {
+  local prompt="$1" default_value="${2:-}" entered
+  if [ -n "$default_value" ]; then
+    printf '%s [%s]: ' "$prompt" "$default_value" >&2
+  else
+    printf '%s: ' "$prompt" >&2
+  fi
+  if ! IFS= read -r entered; then
+    printf '\nWizard cancelled: input stream ended.\n' >&2
+    exit 130
+  fi
+  [ -n "$entered" ] || entered="$default_value"
+  WIZARD_REPLY="$entered"
+}
+
+wizard_choice() {
+  local prompt="$1" default_value="$2" allowed="$3" candidate item valid
+  while true; do
+    wizard_read "$prompt" "$default_value"
+    candidate="$WIZARD_REPLY"
+    valid=0
+    for item in $allowed; do
+      [ "$candidate" != "$item" ] || valid=1
+    done
+    if [ "$valid" -eq 1 ]; then WIZARD_REPLY="$candidate"; return 0; fi
+    printf 'Escolha uma destas opções: %s\n' "$allowed" >&2
+  done
+}
+
+wizard_args_have() {
+  argument_list_has "$1" "${WIZARD_PROFILE_ARGS[@]+"${WIZARD_PROFILE_ARGS[@]}"}"
+}
+
+wizard_append_value() {
+  WIZARD_PROFILE_ARGS+=("$1" "$2")
+}
+
+wizard_append_role() {
+  local role="$1" label provider command model effort credential
+  if [ "$role" = "agent" ]; then label="executor"; else label="gerente"; fi
+  wizard_choice "Provider do $label (codex/claude/opencode/openai/anthropic/gemini/deepseek/minimax/openrouter/custom)" "codex" "codex claude opencode openai anthropic gemini deepseek minimax openrouter custom"
+  provider="$WIZARD_REPLY"
+  if [ "$provider" = "custom" ]; then
+    wizard_read "Comando do adapter do $label" ""
+    command="$WIZARD_REPLY"
+    [ -n "$command" ] || { printf 'O comando do adapter não pode ficar vazio.\n' >&2; return 1; }
+    wizard_append_value "--${role}-cmd" "$command"
+  else
+    wizard_append_value "--${role}-provider" "$provider"
+  fi
+  wizard_read "Modelo do $label (vazio usa o padrão do provider)" ""
+  model="$WIZARD_REPLY"
+  if is_direct_provider "$provider" && [ -z "$model" ]; then
+    printf 'Providers de API direta exigem o ID explícito do modelo.\n' >&2
+    return 1
+  fi
+  [ -z "$model" ] || wizard_append_value "--${role}-model" "$model"
+  wizard_read "Effort do $label (vazio usa o padrão do provider)" ""
+  effort="$WIZARD_REPLY"
+  [ -z "$effort" ] || wizard_append_value "--${role}-effort" "$effort"
+  if is_direct_provider "$provider"; then
+    wizard_read "Credencial salva do $label (ID/rótulo; vazio usa a padrão)" ""
+    credential="$WIZARD_REPLY"
+    [ -z "$credential" ] || wizard_append_value "--${role}-credential" "$credential"
+    printf '  Dica: rb-ralph --login configura o cofre compartilhado.\n'
+  fi
+}
+
+wizard_print_command() {
+  local argument
+  printf '\nComando montado:\n  '
+  printf '%q' "$SCRIPT_PATH"
+  for argument in "${WIZARD_RUN_ARGS[@]}"; do printf ' %q' "$argument"; done
+  printf '\n\n'
+}
+
+wizard_save_profile() {
+  local name="$1" argument
+  {
+    for argument in "${WIZARD_PROFILE_ARGS[@]}"; do printf '%s\n' "$argument"; done
+  } | node "$PROFILE_HELPER" save-args "$name"
+}
+
+wizard_once() {
+  local project artifacts default_artifacts list_file row id path hash index selection
+  local selected_plan profile_name origin description advanced answer parallel isolation action
+  local plan_ids=() plan_paths=() profile_names=()
+
+  printf '\nRB Ralph · execução assistida\n'
+  printf 'O wizard apenas monta opções validadas; credenciais nunca são gravadas em perfis.\n\n'
+  wizard_read "Pasta do projeto" "$INVOCATION_DIR"
+  project="$WIZARD_REPLY"
+  case "$project" in
+    "~") project="$HOME" ;;
+    "~/"*) project="$HOME/${project#~/}" ;;
+  esac
+  [ -d "$project" ] || { printf 'A pasta do projeto não existe: %s\n' "$project" >&2; return 10; }
+  project="$(cd "$project" && pwd -P)"
+
+  default_artifacts=".rb"
+  [ ! -d "$project/.rb" ] || default_artifacts=".rb"
+  if [ ! -d "$project/.rb" ] && [ -d "$project/.spec" ]; then default_artifacts=".spec"; fi
+  wizard_read "Pasta dos artefatos/fragmentos (relativa ao projeto)" "$default_artifacts"
+  artifacts="$WIZARD_REPLY"
+  [ -d "$project/$artifacts" ] || { printf 'A pasta de artefatos não existe dentro do projeto: %s\n' "$artifacts" >&2; return 10; }
+
+  list_file="$(mktemp "${TMPDIR:-/tmp}/rb-ralph-wizard.XXXXXX")"
+  if ! "$SCRIPT_PATH" --project "$project" --artifacts-dir "$artifacts" --list --no-splash > "$list_file"; then
+    rm -f -- "$list_file"
+    printf 'Não foi possível descobrir planos prontos. Ajuste o projeto ou a pasta de artefatos.\n' >&2
+    return 10
+  fi
+  while IFS= read -r row; do
+    IFS="$TSV_SEPARATOR" read -r id path hash <<< "${row//$'\t'/$TSV_SEPARATOR}"
+    [ "$id" != "artifact_id" ] || continue
+    [ -n "$id" ] || continue
+    plan_ids+=("$id")
+    plan_paths+=("$path")
+  done < "$list_file"
+  rm -f -- "$list_file"
+  [ "${#plan_ids[@]}" -gt 0 ] || { printf 'Nenhum plano rb-execution/v1 pronto foi encontrado.\n' >&2; return 10; }
+  if [ "${#plan_ids[@]}" -eq 1 ]; then
+    selected_plan="${plan_ids[0]}"
+    printf 'Plano encontrado: %s (%s)\n' "$selected_plan" "${plan_paths[0]}"
+  else
+    printf '\nPlanos prontos:\n'
+    index=0
+    while [ "$index" -lt "${#plan_ids[@]}" ]; do
+      printf '  %s) %s  [%s]\n' "$((index + 1))" "${plan_ids[$index]}" "${plan_paths[$index]}"
+      index=$((index + 1))
+    done
+    while true; do
+      wizard_read "Número do plano" "1"
+      selection="$WIZARD_REPLY"
+      if [[ "$selection" =~ ^[1-9][0-9]*$ ]] && [ "$selection" -le "${#plan_ids[@]}" ]; then break; fi
+      printf 'Selecione um número entre 1 e %s.\n' "${#plan_ids[@]}" >&2
+    done
+    selected_plan="${plan_ids[$((selection - 1))]}"
+  fi
+
+  printf '\nPerfis disponíveis:\n'
+  index=0
+  while IFS="$TSV_SEPARATOR" read -r profile_name origin description; do
+    [ "$profile_name" != "name" ] || continue
+    [ -n "$profile_name" ] || continue
+    profile_names+=("$profile_name")
+    printf '  - %-12s %-8s %s\n' "$profile_name" "$origin" "$description"
+  done <<< "$(node "$PROFILE_HELPER" list | tr '\t' "$TSV_SEPARATOR")"
+  printf '  - manual       configure tudo agora\n'
+  while true; do
+    wizard_read "Perfil" "balanced"
+    profile_name="$WIZARD_REPLY"
+    [ "$profile_name" = "manual" ] && break
+    if argument_list_has "$profile_name" "${profile_names[@]}"; then break; fi
+    printf 'Perfil desconhecido: %s\n' "$profile_name" >&2
+  done
+  WIZARD_PROFILE_ARGS=()
+  if [ "$profile_name" != "manual" ]; then
+    load_profile_arguments "$profile_name"
+    WIZARD_PROFILE_ARGS=("${PROFILE_LOADED_ARGS[@]}")
+  fi
+
+  if ! wizard_args_have --agent-provider && ! wizard_args_have --agent-cmd; then
+    wizard_append_role agent || return 10
+  fi
+  if ! wizard_args_have --manager-provider && ! wizard_args_have --manager-cmd; then
+    wizard_choice "Gerente usa o mesmo provider/comando do executor? (s/n)" "s" "s n"
+    if [ "$WIZARD_REPLY" = "n" ]; then wizard_append_role manager || return 10; fi
+  fi
+
+  wizard_choice "Personalizar controles avançados? (s/n)" "n" "s n"
+  advanced="$WIZARD_REPLY"
+  if [ "$advanced" = "s" ]; then
+    wizard_choice "Unidade de execução (task/phase)" "task" "task phase"
+    wizard_append_value --execution-unit "$WIZARD_REPLY"
+    wizard_choice "Auditoria do gerente (exhaustive/legacy)" "exhaustive" "exhaustive legacy"
+    wizard_append_value --manager-audit "$WIZARD_REPLY"
+    wizard_choice "Revisão do gerente (delivery/code)" "delivery" "delivery code"
+    wizard_append_value --manager-review "$WIZARD_REPLY"
+    wizard_choice "Auditoria final? (s/n)" "s" "s n"
+    if [ "$WIZARD_REPLY" = "s" ]; then WIZARD_PROFILE_ARGS+=(--final-audit); else WIZARD_PROFILE_ARGS+=(--no-final-audit); fi
+    wizard_choice "Dashboard? (s/n)" "s" "s n"
+    if [ "$WIZARD_REPLY" = "s" ]; then WIZARD_PROFILE_ARGS+=(--dashboard); else WIZARD_PROFILE_ARGS+=(--no-dashboard); fi
+    wizard_choice "Permissões (yolo/protected)" "yolo" "yolo protected"
+    if [ "$WIZARD_REPLY" = "yolo" ]; then WIZARD_PROFILE_ARGS+=(--yolo); else WIZARD_PROFILE_ARGS+=(--protected); fi
+    while true; do
+      wizard_read "Quantidade máxima de agentes paralelos" "1"
+      parallel="$WIZARD_REPLY"
+      [[ "$parallel" =~ ^[1-9][0-9]*$ ]] && break
+      printf 'Informe um inteiro positivo.\n' >&2
+    done
+    wizard_append_value --parallel "$parallel"
+    if [ "$parallel" -gt 1 ]; then isolation="worktree"; else isolation="shared"; fi
+    wizard_choice "Isolamento (shared/worktree)" "$isolation" "shared worktree"
+    isolation="$WIZARD_REPLY"
+    if [ "$parallel" -gt 1 ] && [ "$isolation" != "worktree" ]; then
+      printf 'Execução paralela exige isolamento worktree; ajustado automaticamente.\n' >&2
+      isolation="worktree"
+    fi
+    wizard_append_value --isolation "$isolation"
+    wizard_read "Timeout da primeira saída do executor em segundos (0 desativa)" "300"
+    [[ "$WIZARD_REPLY" =~ ^[0-9]+$ ]] || { printf 'Timeout inválido.\n' >&2; return 10; }
+    wizard_append_value --agent-first-output-timeout "$WIZARD_REPLY"
+    wizard_read "Timeout da primeira saída do gerente em segundos (0 desativa)" "180"
+    [[ "$WIZARD_REPLY" =~ ^[0-9]+$ ]] || { printf 'Timeout inválido.\n' >&2; return 10; }
+    wizard_append_value --manager-first-output-timeout "$WIZARD_REPLY"
+  fi
+
+  WIZARD_RUN_ARGS=(--project "$project" --artifacts-dir "$artifacts" --plan "$selected_plan")
+  WIZARD_RUN_ARGS+=("${WIZARD_PROFILE_ARGS[@]}")
+  wizard_print_command
+  wizard_choice "Ação: executar/salvar/mostrar/reiniciar/cancelar" "executar" "executar salvar mostrar reiniciar cancelar"
+  action="$WIZARD_REPLY"
+  case "$action" in
+    executar)
+      exec "$SCRIPT_PATH" "${WIZARD_RUN_ARGS[@]}"
+      ;;
+    salvar)
+      wizard_read "Nome do perfil ([a-z0-9-])" "meu-perfil"
+      wizard_save_profile "$WIZARD_REPLY"
+      exec "$SCRIPT_PATH" "${WIZARD_RUN_ARGS[@]}"
+      ;;
+    mostrar) return 0 ;;
+    reiniciar) return 10 ;;
+    cancelar) printf 'Execução cancelada; nenhum provider foi iniciado.\n'; return 0 ;;
+  esac
+}
+
+run_wizard() {
+  require_profile_helper
+  play_splash
+  while true; do
+    if wizard_once; then return 0; fi
+    printf '\nReiniciando o assistente...\n' >&2
+  done
+}
+
+if [ "$#" -eq 0 ]; then
+  if [ -t 0 ] && [ -t 1 ]; then
+    run_wizard
+    exit 0
+  fi
+  usage
+  printf '\nERROR: No options were provided and stdin/stdout are not interactive; use --wizard in a terminal or pass a complete command.\n' >&2
+  exit 2
+fi
+
+if [ "${1:-}" = "provider" ]; then
+  case "${2:-}" in
+    list|test)
+      resolve_core_cli
+      RB_PROVIDER_CLI_NAME=rb-ralph core_cli_call "$@"
+      exit $?
+      ;;
+    *) die "provider requires list or test" ;;
+  esac
+fi
+
+if [ "${1:-}" = "profile" ]; then
+  run_profile_command "$@"
+  exit 0
+fi
+
+if [ "${1:-}" = "--wizard" ]; then
+  [ "$#" -eq 1 ] || die "--wizard does not accept additional options; answer them interactively"
+  run_wizard
+  exit 0
+fi
+
+if [ "${1:-}" = "--login" ]; then
+  [ "$#" -eq 1 ] || die "--login does not accept credentials or provider options on the command line; answer them interactively"
+  resolve_core_cli
+  core_cli_call auth login
+  exit $?
+fi
+
+EXPANDED_ARGS=()
+expand_profile_arguments "$@"
+set -- "${EXPANDED_ARGS[@]}"
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --project)
@@ -1182,6 +2198,11 @@ while [ "$#" -gt 0 ]; do
     --plan)
       [ "$#" -ge 2 ] || die "--plan requires an artifact ID or path"
       PLAN_SELECTOR="$2"
+      shift 2
+      ;;
+    --artifacts-dir|--fragments-dir)
+      [ "$#" -ge 2 ] || die "$1 requires a directory"
+      ARTIFACTS_DIR_INPUT="$2"
       shift 2
       ;;
     --core-cli)
@@ -1202,19 +2223,19 @@ while [ "$#" -gt 0 ]; do
       shift 2
       ;;
     --provider)
-      [ "$#" -ge 2 ] || die "--provider requires codex, claude, or opencode"
+      [ "$#" -ge 2 ] || die "--provider requires a supported CLI or direct API provider"
       SHARED_PROVIDER="$2"
       SHARED_PROVIDER_SET=1
       shift 2
       ;;
     --agent-provider)
-      [ "$#" -ge 2 ] || die "--agent-provider requires codex, claude, or opencode"
+      [ "$#" -ge 2 ] || die "--agent-provider requires a supported CLI or direct API provider"
       CLI_AGENT_PROVIDER="$2"
       CLI_AGENT_PROVIDER_SET=1
       shift 2
       ;;
     --manager-provider)
-      [ "$#" -ge 2 ] || die "--manager-provider requires codex, claude, or opencode"
+      [ "$#" -ge 2 ] || die "--manager-provider requires a supported CLI or direct API provider"
       CLI_MANAGER_PROVIDER="$2"
       CLI_MANAGER_PROVIDER_SET=1
       shift 2
@@ -1235,6 +2256,42 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -ge 2 ] && [ -n "$2" ] || die "--manager-model requires a model ID"
       CLI_MANAGER_MODEL="$2"
       CLI_MANAGER_MODEL_SET=1
+      shift 2
+      ;;
+    --effort)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || die "--effort requires a reasoning-effort level"
+      CLI_SHARED_EFFORT="$2"
+      CLI_SHARED_EFFORT_SET=1
+      shift 2
+      ;;
+    --agent-effort)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || die "--agent-effort requires a reasoning-effort level"
+      CLI_AGENT_EFFORT="$2"
+      CLI_AGENT_EFFORT_SET=1
+      shift 2
+      ;;
+    --manager-effort)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || die "--manager-effort requires a reasoning-effort level"
+      CLI_MANAGER_EFFORT="$2"
+      CLI_MANAGER_EFFORT_SET=1
+      shift 2
+      ;;
+    --credential)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || die "--credential requires a saved credential ID or label"
+      CLI_SHARED_CREDENTIAL="$2"
+      CLI_SHARED_CREDENTIAL_SET=1
+      shift 2
+      ;;
+    --agent-credential)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || die "--agent-credential requires a saved credential ID or label"
+      CLI_AGENT_CREDENTIAL="$2"
+      CLI_AGENT_CREDENTIAL_SET=1
+      shift 2
+      ;;
+    --manager-credential)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || die "--manager-credential requires a saved credential ID or label"
+      CLI_MANAGER_CREDENTIAL="$2"
+      CLI_MANAGER_CREDENTIAL_SET=1
       shift 2
       ;;
     --max-attempts)
@@ -1272,6 +2329,11 @@ while [ "$#" -gt 0 ]; do
       AGENT_IDLE_TIMEOUT="$2"
       shift 2
       ;;
+    --agent-first-output-timeout)
+      [ "$#" -ge 2 ] || die "--agent-first-output-timeout requires seconds"
+      AGENT_FIRST_OUTPUT_TIMEOUT="$2"
+      shift 2
+      ;;
     --manager-timeout)
       [ "$#" -ge 2 ] || die "--manager-timeout requires seconds"
       MANAGER_TIMEOUT="$2"
@@ -1280,6 +2342,26 @@ while [ "$#" -gt 0 ]; do
     --manager-idle-timeout)
       [ "$#" -ge 2 ] || die "--manager-idle-timeout requires seconds"
       MANAGER_IDLE_TIMEOUT="$2"
+      shift 2
+      ;;
+    --manager-first-output-timeout)
+      [ "$#" -ge 2 ] || die "--manager-first-output-timeout requires seconds"
+      MANAGER_FIRST_OUTPUT_TIMEOUT="$2"
+      shift 2
+      ;;
+    --manager-review)
+      [ "$#" -ge 2 ] || die "--manager-review requires delivery or code"
+      MANAGER_REVIEW_MODE="$2"
+      shift 2
+      ;;
+    --manager-audit)
+      [ "$#" -ge 2 ] || die "--manager-audit requires exhaustive or legacy"
+      MANAGER_AUDIT_MODE="$2"
+      shift 2
+      ;;
+    --execution-unit)
+      [ "$#" -ge 2 ] || die "--execution-unit requires task or phase"
+      EXECUTION_UNIT="$2"
       shift 2
       ;;
     --validation-mode)
@@ -1315,6 +2397,16 @@ while [ "$#" -gt 0 ]; do
     --max-limit-wait)
       [ "$#" -ge 2 ] || die "--max-limit-wait requires seconds"
       MAX_RATE_LIMIT_WAIT="$2"
+      shift 2
+      ;;
+    --no-agent-context)
+      AGENT_CONTEXT=0
+      shift
+      ;;
+    --agent-context-bytes)
+      [ "$#" -ge 2 ] || die "--agent-context-bytes requires a byte budget"
+      case "$2" in ''|*[!0-9]*) die "--agent-context-bytes requires a non-negative integer" ;; esac
+      AGENT_CONTEXT_BYTES="$2"
       shift 2
       ;;
     --isolation)
@@ -1371,8 +2463,8 @@ while [ "$#" -gt 0 ]; do
       shift
       ;;
     --splash)
-      SPLASH=1
-      shift
+      RB_RALPH_SPLASH_SHOWN=0 play_splash
+      exit 0
       ;;
     --no-splash)
       SPLASH=0
@@ -1380,6 +2472,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --dashboard|--tui)
       DASHBOARD=1
+      shift
+      ;;
+    --no-dashboard)
+      DASHBOARD=0
       shift
       ;;
     --watch)
@@ -1416,8 +2512,10 @@ done
 [[ "$MAX_INCOMPLETE_RETRIES" =~ ^[0-9]+$ ]] || die "RB_RALPH_MAX_INCOMPLETE_RETRIES must be a non-negative integer"
 [[ "$AGENT_TIMEOUT" =~ ^[0-9]+$ ]] || die "--agent-timeout must be a non-negative integer"
 [[ "$AGENT_IDLE_TIMEOUT" =~ ^[0-9]+$ ]] || die "--agent-idle-timeout must be a non-negative integer"
+[[ "$AGENT_FIRST_OUTPUT_TIMEOUT" =~ ^[0-9]+$ ]] || die "--agent-first-output-timeout must be a non-negative integer"
 [[ "$MANAGER_TIMEOUT" =~ ^[0-9]+$ ]] || die "--manager-timeout must be a non-negative integer"
 [[ "$MANAGER_IDLE_TIMEOUT" =~ ^[0-9]+$ ]] || die "--manager-idle-timeout must be a non-negative integer"
+[[ "$MANAGER_FIRST_OUTPUT_TIMEOUT" =~ ^[0-9]+$ ]] || die "--manager-first-output-timeout must be a non-negative integer"
 [[ "$VALIDATION_TIMEOUT" =~ ^[0-9]+$ ]] || die "--validation-timeout must be a non-negative integer"
 [[ "$PARALLEL_LIMIT" =~ ^[1-9][0-9]*$ ]] || die "--parallel must be a positive integer"
 [[ "$MAX_PROMPT_BYTES" =~ ^[0-9]+$ ]] || die "--max-prompt-bytes must be a non-negative integer"
@@ -1435,6 +2533,18 @@ esac
 case "$VALIDATION_MODE" in
   run|manager) ;;
   *) die "--validation-mode must be run or manager" ;;
+esac
+case "$MANAGER_REVIEW_MODE" in
+  delivery|code) ;;
+  *) die "--manager-review must be delivery or code" ;;
+esac
+case "$MANAGER_AUDIT_MODE" in
+  exhaustive|legacy) ;;
+  *) die "--manager-audit must be exhaustive or legacy" ;;
+esac
+case "$EXECUTION_UNIT" in
+  task|phase) ;;
+  *) die "--execution-unit must be task or phase" ;;
 esac
 case "$ISOLATION" in
   shared|worktree) ;;
@@ -1456,6 +2566,10 @@ case "$MEMORY_MODE" in
   off|required|best-effort) ;;
   *) die "--memory-mode must be off, required, or best-effort" ;;
 esac
+if [ "$SPLASH" -eq 1 ] && [ "$LIST_ONLY" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
+  play_splash
+fi
+
 if [ "$WATCH_ONLY" -eq 1 ]; then
   [ -d "$PROJECT" ] || die "Project directory does not exist: $PROJECT"
   [ -x "$DASHBOARD_CLI" ] || die "RB Ralph dashboard not found: $DASHBOARD_CLI; reinstall the complete package"
@@ -1485,20 +2599,34 @@ if [ "$MEMORY_MODE" != "off" ]; then
 fi
 [ -d "$PROJECT" ] || die "Project directory does not exist: $PROJECT"
 PROJECT="$(cd "$PROJECT" && pwd -P)"
+resolve_artifacts_directory
 if [ "$ISOLATION" = "worktree" ]; then
   git -C "$PROJECT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "worktree isolation requires a Git repository"
   git -C "$PROJECT" rev-parse --verify HEAD >/dev/null 2>&1 || die "worktree isolation requires an initial commit"
 fi
 
-if ! RESOLVED="$(core_cli_call tree resolve "$PROJECT" --kind execution-plan --status ready --format tsv)"; then
-  die "Artifact discovery failed; no provider was started"
+if [ -f "$ARTIFACTS_DIR/rb-manifest.json" ]; then
+  if ! RESOLVED="$(core_cli_call tree resolve "$PROJECT" --artifacts-dir "$ARTIFACTS_DIR" --kind execution-plan --status ready --format tsv)"; then
+    die "Artifact discovery failed in $ARTIFACTS_RELATIVE; no provider was started"
+  fi
+else
+  [ -f "$FRAGMENT_DISCOVERY_HELPER" ] \
+    || die "Manifest-less fragment discovery helper not found; reinstall the complete RB Ralph package"
+  DISCOVERY_TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/rb-ralph-fragments.XXXXXX")"
+  trap cleanup_discovery_temp EXIT INT TERM
+  if ! RESOLVED="$(node "$FRAGMENT_DISCOVERY_HELPER" discover "$PROJECT" "$ARTIFACTS_DIR" "$DISCOVERY_TEMP_ROOT")"; then
+    cleanup_discovery_temp
+    die "Compatible fragment discovery failed in $ARTIFACTS_RELATIVE; no provider was started"
+  fi
 fi
 
 PLAN_IDS=()
 PLAN_PATHS=()
 PLAN_HASHES=()
+PLAN_CANONICAL_PATHS=()
+PLAN_SOURCE_FORMATS=()
 while IFS= read -r tsv_row; do
-  IFS="$TSV_SEPARATOR" read -r id kind status contract path sha256 \
+  IFS="$TSV_SEPARATOR" read -r id kind status contract path sha256 canonical_path source_format \
     <<< "${tsv_row//$'\t'/$TSV_SEPARATOR}"
   case "$id" in
     \#*|id|"") continue ;;
@@ -1506,16 +2634,28 @@ while IFS= read -r tsv_row; do
   [ "$kind" = "execution-plan" ] || continue
   [ "$status" = "ready" ] || continue
   [ "$contract" = "rb-execution/v1" ] || die "Unsupported execution contract for $id: $contract"
+  if [ -n "${canonical_path:-}" ]; then
+    [ -f "$canonical_path" ] || die "Imported canonical plan is missing for $id"
+    core_cli_call contract inspect "$canonical_path" --format tsv >/dev/null \
+      || die "Imported plan $path is not a valid rb-execution/v1 contract; no provider was started"
+  else
+    path="$(physical_artifact_path "$path")"
+  fi
   PLAN_IDS+=("$id")
   PLAN_PATHS+=("$path")
   PLAN_HASHES+=("$sha256")
+  PLAN_CANONICAL_PATHS+=("${canonical_path:-}")
+  PLAN_SOURCE_FORMATS+=("${source_format:-rb-manifest/v1}")
 done <<< "$RESOLVED"
 
 if [ "$LIST_ONLY" -eq 1 ]; then
   printf 'artifact_id\tpath\tsha256\n'
-  for index in "${!PLAN_IDS[@]}"; do
+  index=0
+  while [ "$index" -lt "${#PLAN_IDS[@]}" ]; do
     printf '%s\t%s\t%s\n' "${PLAN_IDS[$index]}" "${PLAN_PATHS[$index]}" "${PLAN_HASHES[$index]}"
+    index=$((index + 1))
   done
+  cleanup_discovery_temp
   exit 0
 fi
 
@@ -1523,19 +2663,23 @@ fi
 
 SELECTED=-1
 if [ -n "$PLAN_SELECTOR" ]; then
-  for index in "${!PLAN_IDS[@]}"; do
+  index=0
+  while [ "$index" -lt "${#PLAN_IDS[@]}" ]; do
     if [ "${PLAN_IDS[$index]}" = "$PLAN_SELECTOR" ] || [ "${PLAN_PATHS[$index]}" = "$PLAN_SELECTOR" ]; then
       SELECTED="$index"
       break
     fi
+    index=$((index + 1))
   done
   [ "$SELECTED" -ge 0 ] || die "Ready plan not found: $PLAN_SELECTOR"
 elif [ "${#PLAN_IDS[@]}" -eq 1 ]; then
   SELECTED=0
 else
   printf 'Multiple ready plans found; select one with --plan:\n' >&2
-  for index in "${!PLAN_IDS[@]}"; do
+  index=0
+  while [ "$index" -lt "${#PLAN_IDS[@]}" ]; do
     printf '  %s\t%s\n' "${PLAN_IDS[$index]}" "${PLAN_PATHS[$index]}" >&2
+    index=$((index + 1))
   done
   exit 1
 fi
@@ -1543,7 +2687,10 @@ fi
 PLAN_ID="${PLAN_IDS[$SELECTED]}"
 PLAN_PATH="${PLAN_PATHS[$SELECTED]}"
 PLAN_HASH="${PLAN_HASHES[$SELECTED]}"
-PLAN_ABSOLUTE="$PROJECT/$PLAN_PATH"
+PLAN_SOURCE_FORMAT="${PLAN_SOURCE_FORMATS[$SELECTED]}"
+PLAN_SOURCE_ABSOLUTE="$PROJECT/$PLAN_PATH"
+PLAN_ABSOLUTE="${PLAN_CANONICAL_PATHS[$SELECTED]}"
+[ -n "$PLAN_ABSOLUTE" ] || PLAN_ABSOLUTE="$PLAN_SOURCE_ABSOLUTE"
 
 if [ "$FINAL_AUDIT" -eq 1 ]; then
   [ -f "$OPERATIONAL_VERIFIER" ] || die "RB Ralph operational verifier not found: $OPERATIONAL_VERIFIER; reinstall the complete package"
@@ -1555,17 +2702,17 @@ if [ "$FINAL_AUDIT" -eq 1 ]; then
   elif [ -n "$OPERATIONAL_CONTRACT_ENV" ]; then
     operational_candidate="$OPERATIONAL_CONTRACT_ENV"
     operational_source="RB_RALPH_OPERATIONAL_CONTRACT"
-  elif [ -f "$(dirname "$PLAN_ABSOLUTE")/OPERATIONS.json" ]; then
-    operational_candidate="$(dirname "$PLAN_ABSOLUTE")/OPERATIONS.json"
+  elif [ -f "$(dirname "$PLAN_SOURCE_ABSOLUTE")/OPERATIONS.json" ]; then
+    operational_candidate="$(dirname "$PLAN_SOURCE_ABSOLUTE")/OPERATIONS.json"
     operational_source="plan directory"
-  elif [ -f "$PROJECT/.rb/OPERATIONS.json" ]; then
-    operational_candidate="$PROJECT/.rb/OPERATIONS.json"
+  elif [ -f "$ARTIFACTS_DIR/OPERATIONS.json" ]; then
+    operational_candidate="$ARTIFACTS_DIR/OPERATIONS.json"
     operational_source="project"
-  elif [ -f "$PROJECT/.rb/init/OPERATIONS.json" ]; then
-    operational_candidate="$PROJECT/.rb/init/OPERATIONS.json"
+  elif [ -f "$ARTIFACTS_DIR/init/OPERATIONS.json" ]; then
+    operational_candidate="$ARTIFACTS_DIR/init/OPERATIONS.json"
     operational_source="project initialization"
-  elif [ -f "$PROJECT/.rb/context/OPERATIONS.json" ]; then
-    operational_candidate="$PROJECT/.rb/context/OPERATIONS.json"
+  elif [ -f "$ARTIFACTS_DIR/context/OPERATIONS.json" ]; then
+    operational_candidate="$ARTIFACTS_DIR/context/OPERATIONS.json"
     operational_source="project context"
   fi
   if [ -n "$operational_candidate" ]; then
@@ -1587,7 +2734,7 @@ if ! PHASES="$(core_cli_call contract inspect "$PLAN_ABSOLUTE" --format tsv)"; t
   die "Execution contract inspection failed; no provider was started"
 fi
 
-log "plan=$PLAN_ID path=$PLAN_PATH sha256=$PLAN_HASH"
+log "plan=$PLAN_ID path=$PLAN_PATH sha256=$PLAN_HASH artifacts-dir=$ARTIFACTS_RELATIVE source-format=$PLAN_SOURCE_FORMAT"
 
 if [ "$DRY_RUN" -eq 1 ]; then
   while IFS= read -r tsv_row; do
@@ -1606,6 +2753,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
     printf 'pending\tphase=%s\ttasks=1\tpending=1\tdepends=all\ttitle=Independent operational acceptance\tcontract=%s\n' \
       "$FINAL_PHASE_ID" "${OPERATIONAL_CONTRACT#"$PROJECT/"}"
   fi
+  cleanup_discovery_temp
   exit 0
 fi
 
@@ -1614,13 +2762,14 @@ if [ "$FINAL_AUDIT" -eq 1 ]; then
 fi
 
 configure_roles
+[ -z "$DISCOVERY_TEMP_ROOT" ] || ACTIVE_TEMP_ROOTS+=("$DISCOVERY_TEMP_ROOT")
 [ -f "$EVIDENCE_HELPER" ] || die "RB Ralph evidence helper not found: $EVIDENCE_HELPER; reinstall the complete package instead of copying only bin/rb-ralph"
 [ -f "$PROCESS_SUPERVISOR" ] || die "RB Ralph process supervisor not found: $PROCESS_SUPERVISOR; reinstall the complete package instead of copying only bin/rb-ralph"
+[ -f "$EVIDENCE_INDEX_HELPER" ] || die "RB Ralph evidence-index helper not found: $EVIDENCE_INDEX_HELPER; reinstall the complete package"
+[ -f "$VALIDATION_CACHE_HELPER" ] || die "RB Ralph validation-cache helper not found: $VALIDATION_CACHE_HELPER; reinstall the complete package"
+[ -f "$MANAGER_AUDIT_HELPER" ] || die "RB Ralph manager-audit helper not found: $MANAGER_AUDIT_HELPER; reinstall the complete package"
 [ -f "$CONTROL_PLANE_HELPER" ] || die "RB Ralph control-plane helper not found: $CONTROL_PLANE_HELPER; reinstall the complete package instead of copying only bin/rb-ralph"
-if [ "$SPLASH" -eq 1 ]; then
-  [ -f "$SPLASH_HELPER" ] || die "RB Ralph splash helper not found: $SPLASH_HELPER; reinstall the complete package"
-  RB_RALPH_SPLASH=1 node "$SPLASH_HELPER" --version "$RB_RALPH_VERSION"
-elif [ -t 1 ] && [ "$DASHBOARD" -eq 0 ]; then
+if [ -t 1 ] && [ "$DASHBOARD" -eq 0 ]; then
   print_brand
   printf '\n'
 fi
@@ -1632,9 +2781,7 @@ FINDINGS_FILE="$STATE_DIR/findings.tsv"
 OPERATIONAL_ACCEPTED_FILE="$STATE_DIR/operational-accepted.txt"
 LOCK_DIR="$STATE_DIR/.lock"
 mkdir -p "$STATE_DIR/prompts" "$STATE_DIR/logs" "$STATE_DIR/phases" "$STATE_DIR/evidence" "$STATE_DIR/memory/checkpoints"
-if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-  die "Run is already locked: $RUN_ID"
-fi
+acquire_run_lock
 trap cleanup_runtime EXIT INT TERM
 
 if [ ! -f "$STATE_DIR/run.tsv" ]; then
@@ -1645,8 +2792,10 @@ if [ ! -f "$EVENTS_FILE" ]; then
   printf 'timestamp\tphase_id\tattempt\tstatus\treason\n' > "$EVENTS_FILE"
 fi
 if [ ! -f "$FINDINGS_FILE" ]; then
-  printf 'finding_id\tphase_id\topened_attempt\tstatus\treason\topened_evidence_sha256\tresolved_attempt\tresolved_evidence_sha256\n' > "$FINDINGS_FILE"
+  printf 'finding_id\tphase_id\topened_attempt\tstatus\treason\topened_evidence_sha256\tresolved_attempt\tresolved_evidence_sha256\tfinding_key\tcriteria\tlatest_reason\tlatest_evidence_sha256\tlast_seen_attempt\n' > "$FINDINGS_FILE"
 fi
+node "$MANAGER_AUDIT_HELPER" replay "$FINDINGS_FILE" "$STATE_DIR/logs" "$STATE_DIR/prompts" >/dev/null \
+  || die "Could not migrate and reconcile the cumulative finding ledger"
 
 [ -f "$TELEMETRY_HELPER" ] || die "RB Ralph telemetry helper not found: $TELEMETRY_HELPER; reinstall the complete package"
 [ -f "$USAGE_HELPER" ] || die "RB Ralph usage helper not found: $USAGE_HELPER; reinstall the complete package"
@@ -1655,8 +2804,10 @@ start_dashboard
 
 MEMORY_CONTEXT_FILE="$STATE_DIR/memory/bootstrap.json"
 if [ "$MEMORY_MODE" != "off" ]; then
-  MEMORY_PROJECT_ID="$(node -e 'const m=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")); process.stdout.write(m.project.id)' "$PROJECT/.rb/rb-manifest.json")"
-  MEMORY_PROJECT_NAME="$(node -e 'const m=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")); process.stdout.write(m.project.name)' "$PROJECT/.rb/rb-manifest.json")"
+  [ -f "$ARTIFACTS_DIR/rb-manifest.json" ] \
+    || die "RB Memory integration requires rb-manifest.json in the selected artifact directory"
+  MEMORY_PROJECT_ID="$(node -e 'const m=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")); process.stdout.write(m.project.id)' "$ARTIFACTS_DIR/rb-manifest.json")"
+  MEMORY_PROJECT_NAME="$(node -e 'const m=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")); process.stdout.write(m.project.name)' "$ARTIFACTS_DIR/rb-manifest.json")"
   sync_memory_bootstrap
 fi
 
@@ -1732,6 +2883,10 @@ while IFS= read -r tsv_row; do
     core_cli_call contract extract "$PLAN_ABSOLUTE" --phase "$phase_id" > "$PHASE_FILE"
     VALIDATIONS="$(core_cli_call contract validations "$PLAN_ABSOLUTE" --phase "$phase_id" --format tsv)"
     TASKS="$(core_cli_call contract tasks "$PLAN_ABSOLUTE" --phase "$phase_id" --format tsv)"
+    TASK_DETAILS_FILE="$STATE_DIR/phases/$phase_id-tasks.json"
+    VALIDATION_DETAILS_FILE="$STATE_DIR/phases/$phase_id-validations.json"
+    core_cli_call contract tasks "$PLAN_ABSOLUTE" --phase "$phase_id" --format json > "$TASK_DETAILS_FILE"
+    core_cli_call contract validations "$PLAN_ABSOLUTE" --phase "$phase_id" --format json > "$VALIDATION_DETAILS_FILE"
   fi
   HUMAN_VALIDATION_SUMMARY="$(
     while IFS= read -r validation_row; do
@@ -1764,12 +2919,12 @@ while IFS= read -r tsv_row; do
   done <<< "$TASKS"
 
   pending_set=","
-  for task_id in "${PENDING_TASK_IDS[@]}"; do
+  for task_id in "${PENDING_TASK_IDS[@]+"${PENDING_TASK_IDS[@]}"}"; do
     pending_set+="$task_id,"
   done
-  for task_depends in "${PENDING_TASK_DEPS[@]}"; do
+  for task_depends in "${PENDING_TASK_DEPS[@]+"${PENDING_TASK_DEPS[@]}"}"; do
     IFS=',' read -r -a dependency_ids <<< "$task_depends"
-    for dependency_id in "${dependency_ids[@]}"; do
+    for dependency_id in "${dependency_ids[@]+"${dependency_ids[@]}"}"; do
       [ -z "$dependency_id" ] && continue
       if [[ "$pending_set" == *",$dependency_id,"* ]]; then
         all_pending_parallel=0
@@ -1803,6 +2958,10 @@ while IFS= read -r tsv_row; do
   stalled_attempts=0
   strategy_resets=0
   same_feedback_count=0
+  last_finding_batch=""
+  if [ "$previous_attempt" -gt 0 ] && [ -f "$STATE_DIR/logs/$phase_id-attempt-$previous_attempt-manager-audit.json" ]; then
+    last_finding_batch="$(manager_finding_batch_fingerprint "$STATE_DIR/logs/$phase_id-attempt-$previous_attempt-manager-audit.json")"
+  fi
   phase_run_attempts=0
   rate_limit_waits=0
   incomplete_retries=0
@@ -1833,6 +2992,11 @@ while IFS= read -r tsv_row; do
     CONTROL_SNAPSHOT="$(mktemp "${TMPDIR:-/tmp}/rb-ralph-control-before.XXXXXX")"
     CONTROL_DIFF="$(mktemp "${TMPDIR:-/tmp}/rb-ralph-control-diff.XXXXXX")"
 
+    # A provider-availability retry or interrupted task call reuses the logical
+    # attempt number. Remove only the current task-call outputs before taking
+    # the immutable control-plane snapshot; invoke_agent republishes them
+    # atomically from its out-of-tree capture directory.
+    reset_task_call_outputs
     node "$EVIDENCE_HELPER" snapshot "$PROJECT" "$BEFORE_SNAPSHOT" \
       || die "$phase_id could not capture pre-agent project evidence"
     node "$CONTROL_PLANE_HELPER" snapshot "$STATE_DIR" "$CONTROL_SNAPSHOT" \
@@ -1853,7 +3017,7 @@ while IFS= read -r tsv_row; do
         ACTIVE_TEMP_ROOTS+=("$ATTEMPT_TEMP_ROOT")
         log "$phase_id isolation snapshot=$SNAPSHOT_COMMIT"
       fi
-      for task_id in "${PENDING_TASK_IDS[@]}"; do
+      for task_id in "${PENDING_TASK_IDS[@]+"${PENDING_TASK_IDS[@]}"}"; do
         TASK_FILE="$STATE_DIR/phases/$phase_id-$task_id.txt"
         TASK_PROMPT="$STATE_DIR/prompts/$phase_id-$task_id-attempt-$attempt-agent.txt"
         TASK_LOG="$STATE_DIR/logs/$phase_id-$task_id-attempt-$attempt-agent.log"
@@ -1871,7 +3035,7 @@ while IFS= read -r tsv_row; do
         batch_pids+=("$!")
         all_task_logs+=("$TASK_LOG")
         if [ "${#batch_pids[@]}" -ge "$PARALLEL_LIMIT" ]; then
-          for pid in "${batch_pids[@]}"; do
+          for pid in "${batch_pids[@]+"${batch_pids[@]}"}"; do
             if wait "$pid"; then
               :
             else
@@ -1882,7 +3046,7 @@ while IFS= read -r tsv_row; do
           batch_pids=()
         fi
       done
-      for pid in "${batch_pids[@]}"; do
+      for pid in "${batch_pids[@]+"${batch_pids[@]}"}"; do
         if wait "$pid"; then
           :
         else
@@ -1890,14 +3054,40 @@ while IFS= read -r tsv_row; do
           if [ "$wait_rc" -eq 75 ]; then agent_rc=75; elif [ "$agent_rc" -eq 0 ]; then agent_rc="$wait_rc"; fi
         fi
       done
-      for task_log in "${all_task_logs[@]}"; do
+      for task_log in "${all_task_logs[@]+"${all_task_logs[@]}"}"; do
         printf '\n--- %s ---\n' "$(basename "$task_log")" >> "$AGENT_LOG"
         cat "$task_log" >> "$AGENT_LOG"
+      done
+    elif [ "$EXECUTION_UNIT" = "task" ] && [ "${#PENDING_TASK_IDS[@]}" -gt 0 ]; then
+      log "$phase_id attempt $attempt (run $(run_attempt_display "$phase_run_attempts")): ${#PENDING_TASK_IDS[@]} fresh sequential task agent(s)"
+      : > "$AGENT_LOG"
+      for task_id in "${PENDING_TASK_IDS[@]+"${PENDING_TASK_IDS[@]}"}"; do
+        TASK_FILE="$STATE_DIR/phases/$phase_id-$task_id.txt"
+        TASK_PROMPT="$STATE_DIR/prompts/$phase_id-$task_id-attempt-$attempt-agent.txt"
+        TASK_LOG="$STATE_DIR/logs/$phase_id-$task_id-attempt-$attempt-agent.log"
+        if [ "$phase_id" = "$FINAL_PHASE_ID" ]; then
+          cp -- "$PHASE_FILE" "$TASK_FILE"
+        else
+          core_cli_call contract extract "$PLAN_ABSOLUTE" --task "$task_id" > "$TASK_FILE"
+        fi
+        write_agent_prompt "$TASK_PROMPT" "$TASK_FILE" "$task_id" "$PROJECT"
+        ensure_prompt_budget "$TASK_PROMPT" "$phase_id/$task_id agent"
+        dashboard_set_phase "$phase_id" running \
+          "G0 · fresh executor for task $task_id · first output ${AGENT_FIRST_OUTPUT_TIMEOUT}s" \
+          "$(attempt_display "$attempt" "$stalled_attempts")"
+        task_rc=0
+        invoke_agent "$TASK_PROMPT" "$TASK_LOG" "$task_id" "$PROJECT" || task_rc=$?
+        printf '\n--- %s ---\n' "$(basename "$TASK_LOG")" >> "$AGENT_LOG"
+        cat "$TASK_LOG" >> "$AGENT_LOG"
+        if [ "$task_rc" -ne 0 ]; then
+          agent_rc="$task_rc"
+          break
+        fi
       done
     else
       write_agent_prompt "$AGENT_PROMPT" "$PHASE_FILE" "" "$PROJECT"
       ensure_prompt_budget "$AGENT_PROMPT" "$phase_id agent"
-      log "$phase_id attempt $attempt (run $(run_attempt_display "$phase_run_attempts")): sequential phase agent"
+      log "$phase_id attempt $attempt (run $(run_attempt_display "$phase_run_attempts")): legacy sequential phase agent"
       invoke_agent "$AGENT_PROMPT" "$AGENT_LOG" "" "$PROJECT" || agent_rc=$?
     fi
 
@@ -1916,6 +3106,7 @@ while IFS= read -r tsv_row; do
       die "$phase_id could not verify orchestrator control-plane integrity"
     fi
     rm -f -- "$CONTROL_DIFF"
+    record_context_compaction_signal "$AGENT_LOG" executor "$phase_id" "$attempt"
 
     if provider_rate_limited "$AGENT_LOG" "$agent_rc"; then
       rate_limit_waits=$((rate_limit_waits + 1))
@@ -1933,23 +3124,52 @@ while IFS= read -r tsv_row; do
         mv "$rate_telemetry" "$USAGE_DIR/$phase_id-attempt-$attempt-rate-limit-$rate_limit_waits-agent.usage.json"
       fi
       if [ -n "$ATTEMPT_TEMP_ROOT" ]; then
-        cleanup_attempt_worktrees "$ATTEMPT_TEMP_ROOT" "${ATTEMPT_WORKTREES[@]}"
+        cleanup_attempt_worktrees "$ATTEMPT_TEMP_ROOT" \
+          "${ATTEMPT_WORKTREES[@]+"${ATTEMPT_WORKTREES[@]}"}"
       fi
       sleep "$wait_seconds"
       phase_run_attempts=$((phase_run_attempts - 1))
       continue
     fi
 
+    if grep -Fq 'RB_RALPH_TIMEOUT_KIND: first-output' "$AGENT_LOG"; then
+      incomplete_retries=$((incomplete_retries + 1))
+      first_output_reason="executor produced no provider output within ${AGENT_FIRST_OUTPUT_TIMEOUT}s; startup/inference evidence preserved without manager review"
+      record_event "$phase_id" "$attempt" "EXECUTOR_FIRST_OUTPUT_TIMEOUT" \
+        "$first_output_reason ($incomplete_retries/$MAX_INCOMPLETE_RETRIES)"
+      mv "$AGENT_LOG" "$STATE_DIR/logs/$phase_id-attempt-$attempt-first-output-$incomplete_retries-agent.log"
+      if [ -n "$ATTEMPT_TEMP_ROOT" ]; then
+        cleanup_attempt_worktrees "$ATTEMPT_TEMP_ROOT" \
+          "${ATTEMPT_WORKTREES[@]+"${ATTEMPT_WORKTREES[@]}"}"
+      fi
+      if [ "$incomplete_retries" -gt "$MAX_INCOMPLETE_RETRIES" ]; then
+        pause_reason="executor first-output circuit breaker after $incomplete_retries provider call(s): $first_output_reason"
+        record_event "$phase_id" "$attempt" "PAUSED" "$pause_reason"
+        dashboard_set_phase "$phase_id" paused "$pause_reason" "$(attempt_display "$attempt" "$stalled_attempts")"
+        dashboard_finish paused
+        wait_dashboard
+        printf 'PAUSED: %s\n' "$pause_reason" >&2
+        exit 2
+      fi
+      dashboard_gate "$phase_id" 0 pending \
+        "G0 · first-output timeout; retrying provider without manager or implementation attempt"
+      log "$phase_id first-output timeout: retry $incomplete_retries/$MAX_INCOMPLETE_RETRIES without consuming attempt $attempt"
+      phase_run_attempts=$((phase_run_attempts - 1))
+      continue
+    fi
+
     if [ "$use_parallel" -eq 1 ] && [ "$ISOLATION" = "worktree" ]; then
       PATCH_DIR="$STATE_DIR/patches/$phase_id-attempt-$attempt"
-      if ! integrate_worktree_changes "$SNAPSHOT_COMMIT" "$ATTEMPT_TEMP_ROOT" "$PATCH_DIR" "${WORKTREE_PATCH_ARGS[@]}"; then
+      if ! integrate_worktree_changes "$SNAPSHOT_COMMIT" "$ATTEMPT_TEMP_ROOT" "$PATCH_DIR" \
+        "${WORKTREE_PATCH_ARGS[@]+"${WORKTREE_PATCH_ARGS[@]}"}"; then
         agent_rc=1
         log "$phase_id isolated task patch integration failed; primary working tree unchanged"
       else
         log "$phase_id isolated task patches integrated into primary working tree"
       fi
       ATTEMPT_WORKTREES+=("$ATTEMPT_TEMP_ROOT/integration")
-      cleanup_attempt_worktrees "$ATTEMPT_TEMP_ROOT" "${ATTEMPT_WORKTREES[@]}"
+      cleanup_attempt_worktrees "$ATTEMPT_TEMP_ROOT" \
+        "${ATTEMPT_WORKTREES[@]+"${ATTEMPT_WORKTREES[@]}"}"
     fi
 
     if [ "$agent_rc" -eq 0 ]; then
@@ -2024,22 +3244,44 @@ while IFS= read -r tsv_row; do
       manual_validations=1
       printf '\n[RBT-FINAL] no rb-operational/v1 contract; independent manager must derive and execute a clean-room product scenario.\n' >> "$VALIDATION_LOG"
     elif [ "$VALIDATION_MODE" = "run" ]; then
+      VALIDATION_CACHE_FILE="$STATE_DIR/evidence/$phase_id-validation-cache.json"
+      VALIDATION_SELECTION_FILE="$STATE_DIR/evidence/$phase_id-attempt-$attempt-validation-selection.tsv"
+      node "$VALIDATION_CACHE_HELPER" select \
+        "$TASK_DETAILS_FILE" "$VALIDATION_DETAILS_FILE" "$CHANGED_PATHS_FILE" "$VALIDATION_CACHE_FILE" \
+        > "$VALIDATION_SELECTION_FILE" \
+        || die "$phase_id could not select bounded incremental validations"
+      validation_impact="$(awk -F '\t' '$1 == "meta" && $2 == "impact" { print $3; exit }' "$VALIDATION_SELECTION_FILE")"
+      validation_impact_reason="$(awk -F '\t' '$1 == "meta" && $2 == "impact" { print $4; exit }' "$VALIDATION_SELECTION_FILE")"
+      printf 'impact=%s reason=%s\n' "${validation_impact:-full}" "${validation_impact_reason:-unavailable}" >> "$VALIDATION_LOG"
       while IFS= read -r validation_row; do
-        IFS="$TSV_SEPARATOR" read -r validation_task validation_kind validation_value \
+        IFS="$TSV_SEPARATOR" read -r validation_task validation_kind validation_value validation_action validation_key validation_provenance \
           <<< "${validation_row//$'\t'/$TSV_SEPARATOR}"
-        [ "$validation_task" = "task_id" ] && continue
+        [ "$validation_task" = "meta" ] && continue
         case "$validation_kind" in
           command)
             validation_commands=$((validation_commands + 1))
             printf '\n[%s] command: %s\n' "$validation_task" "$validation_value" >> "$VALIDATION_LOG"
-            validation_rc=0
-            if [ "$VALIDATION_TIMEOUT" -gt 0 ] && command -v timeout >/dev/null 2>&1; then
-              (cd "$PROJECT" && timeout --foreground "${VALIDATION_TIMEOUT}s" bash -lc "$validation_value") \
-                >> "$VALIDATION_LOG" 2>&1 || validation_rc=$?
+            if [ "$validation_action" = "reuse" ]; then
+              validation_rc=0
+              printf '[%s] exit=0 duration_seconds=0 reused_from=%s\n' \
+                "$validation_task" "${validation_provenance:-validation-cache}" >> "$VALIDATION_LOG"
             else
-              (cd "$PROJECT" && bash -lc "$validation_value") >> "$VALIDATION_LOG" 2>&1 || validation_rc=$?
+              validation_rc=0
+              validation_started="$(date +%s)"
+              if [ "$VALIDATION_TIMEOUT" -gt 0 ] && command -v timeout >/dev/null 2>&1; then
+                (cd "$PROJECT" && timeout --foreground "${VALIDATION_TIMEOUT}s" bash -lc "$validation_value") \
+                  >> "$VALIDATION_LOG" 2>&1 || validation_rc=$?
+              else
+                (cd "$PROJECT" && bash -lc "$validation_value") >> "$VALIDATION_LOG" 2>&1 || validation_rc=$?
+              fi
+              validation_duration=$(( $(date +%s) - validation_started ))
+              printf '[%s] exit=%s duration_seconds=%s\n' \
+                "$validation_task" "$validation_rc" "$validation_duration" >> "$VALIDATION_LOG"
+              node "$VALIDATION_CACHE_HELPER" record "$VALIDATION_CACHE_FILE" "$validation_key" \
+                "$validation_task" "$validation_kind" "$validation_value" "$validation_rc" \
+                "${VALIDATION_LOG#"$PROJECT/"}" \
+                || die "$phase_id could not persist validation evidence"
             fi
-            printf '[%s] exit=%s\n' "$validation_task" "$validation_rc" >> "$VALIDATION_LOG"
             if [ "$validation_rc" -ne 0 ]; then
               validation_failures=$((validation_failures + 1))
             fi
@@ -2052,12 +3294,15 @@ while IFS= read -r tsv_row; do
             printf '\n[%s] human: %s\n' "$validation_task" "$validation_value" >> "$VALIDATION_LOG"
             ;;
         esac
-      done <<< "$VALIDATIONS"
+      done < "$VALIDATION_SELECTION_FILE"
     else
       printf 'Deterministic commands delegated to manager by configuration.\n' >> "$VALIDATION_LOG"
     fi
     log "$phase_id validations: commands=$validation_commands failures=$validation_failures manual=$manual_validations mode=$VALIDATION_MODE"
     CURRENT_EVIDENCE_FINGERPRINT="$(evidence_fingerprint "$CHANGED_PATHS_FILE" "$VALIDATION_LOG" "$PROJECT")"
+    EVIDENCE_INDEX_FILE="$STATE_DIR/evidence/$phase_id-attempt-$attempt-index.json"
+    node "$EVIDENCE_INDEX_HELPER" "$CHANGED_PATHS_FILE" "$VALIDATION_LOG" "$AGENT_LOG" "$EVIDENCE_INDEX_FILE" \
+      || die "$phase_id could not build the bounded evidence index"
     if [ "$phase_id" = "$FINAL_PHASE_ID" ] && [ -n "$OPERATIONAL_CONTRACT" ]; then
       if [ "$validation_failures" -eq 0 ]; then
         dashboard_gate "$phase_id" 2 pass "G2 · clean-room operational contract passed"
@@ -2086,6 +3331,7 @@ while IFS= read -r tsv_row; do
         "$VALIDATION_MODE" "$validation_commands" "$validation_failures"
       printf 'MANUAL_VALIDATIONS: %s\nVALIDATION_LOG: %s\n\n' \
         "$manual_validations" "${VALIDATION_LOG#"$PROJECT/"}"
+      printf 'EVIDENCE_INDEX: %s\n\n' "${EVIDENCE_INDEX_FILE#"$PROJECT/"}"
       printf 'EVIDENCE_FINGERPRINT: %s\n\n' "$CURRENT_EVIDENCE_FINGERPRINT"
       if [ "$phase_id" = "$FINAL_PHASE_ID" ]; then
         printf '%s\n' \
@@ -2101,23 +3347,65 @@ while IFS= read -r tsv_row; do
           'If the operational workflow, documentation, packaging, configuration, startup, or integration is defective, return RETRY with the exact failing command/probe and observed output so the executor can repair it.' \
           'A missing external credential may be BLOCKED only when no credential-free documented scenario can prove the delivered behavior.' \
           ''
+      elif [ "$VALIDATION_MODE" = "run" ]; then
+        printf '%s\n' \
+          'VALIDATION AUTHORITY: RB Ralph is the sole executor of every declared deterministic validation command for this phase.' \
+          'Do not run, repeat, or independently re-create a command already represented in VALIDATION_LOG or EVIDENCE_INDEX, even for confirmation.' \
+          'A reused successful row is authoritative only because Ralph proved that the current changed-path set is fully covered by declared task scopes and did not affect that cached command.' \
+          'Review source, contracts, changed boundaries, and the bounded evidence. If a genuinely missing check is required, return it once as an UNPROVEN finding for the executor/orchestrator; do not execute it in the manager call.' \
+          ''
       fi
       printf '%s\n' \
         'Act as the technical manager for this run. Inspect the current code at every path in CHANGED_PATHS_FILE.' \
-        'Read AGENT_LOG for executor output, verify AGENT_EXIT_CODE, and read VALIDATION_LOG for every command, output, exit code, and pending manual validation.' \
-        'Read the referenced context and verify every task and acceptance criterion in the validated phase below.' \
+        'Start from the bounded EVIDENCE_INDEX below. It contains canonical paths, hashes, changed paths, executor status markers, and validation command/exit/duration rows.' \
+        'Open AGENT_LOG or VALIDATION_LOG only for a concrete unresolved matrix row; read a bounded relevant excerpt and cite its canonical path. Do not ingest complete raw transcripts by default.' \
+        'Inspect current source at changed boundaries and verify every task and acceptance criterion in the validated phase below.' \
         'Do not implement or repair code in this review step.' \
-        'Return exactly one decision and one short reason using this protocol:' \
+        "REVIEW_SCOPE: $MANAGER_REVIEW_MODE" \
+        "Treat $ARTIFACTS_RELATIVE as read-only planning input; never edit generated specifications or fragments during review." \
+        'Audit the entire matrix before deciding. Never stop after finding the first sufficient reason for RETRY.' \
+        'Return every required matrix row exactly once, followed by every currently observable finding as one complete batch, then one decision and one short reason using this protocol:' \
+        'RB_RALPH_AUDIT_STATUS: COMPLETE' \
+        'RB_RALPH_CRITERION: <required-id> | <PASS|FAIL|UNPROVEN|HUMAN_PENDING|NOT_APPLICABLE> | <concise canonical evidence/provenance>' \
+        'RB_RALPH_FINDING: <criterion-id[,criterion-id]> | <affected path or boundary> | <expected state> | <observed failure> | <reproduction/evidence provenance>' \
         'RB_RALPH_DECISION: COMPLETE | RETRY | BLOCKED' \
         'RB_RALPH_REASON: <short evidence-based reason>' \
         '' \
         'Use COMPLETE only when every task and criterion is evidenced.' \
+        'For RETRY, emit one RB_RALPH_FINDING row for every FAIL or UNPROVEN criterion.' \
+        'Group equivalent reproductions under one root-cause finding. Do not create a new finding merely because a different input phrase exposes the same violated invariant.' \
+        'Keep the finding boundary and expected state stable while that invariant remains unresolved: boundary names the canonical component or public interface, expected names the invariant, observed may list all current counterexamples, and evidence names their provenance.' \
+        'When a deterministic mechanism is expected to classify natural language, audit the complete finite authority and its positive/negative equivalence classes in this batch. If no finite authority or explicit classifier contract exists, report one unsafe-ambiguity finding and use BLOCKED instead of feeding the executor an endless vocabulary expansion.' \
+        'The structured finding rows are the complete current snapshot. Repeat an unresolved finding in every RETRY batch. Omitting a prior finding claims it is resolved by the current changed evidence; Ralph keeps it open when the canonical evidence fingerprint did not change.' \
         'Findings are cumulative across retries. COMPLETE means every open finding below is resolved by current code or canonical evidence; a new reason never erases an older one.' \
         'Use RETRY when another implementation attempt can reasonably fix the result. Implementation defects, test failures, incomplete criteria, and incorrect technical approaches are RETRY, never BLOCKED.' \
         'When AGENT_TIMED_OUT is 1, inspect all partial evidence, return RETRY, and give the next executor a concrete recovery strategy that avoids the stalled command or approach. An executor timeout is recoverable and must not be treated as a terminal implementation failure.' \
         'For RETRY, make the reason concrete enough for the executor to correct its approach on the next ephemeral call.' \
         'Use BLOCKED only when an external decision, missing authority, unavailable credential/provider, or unsafe ambiguity prevents implementation progress.' \
-        '' \
+        ''
+      # The final phase is independent product acceptance, not a source review:
+      # its whole purpose is to exercise the real consumer boundary and refuse a
+      # product that does not work. Narrowing it to "did the executor deliver
+      # what the fragment asked" would remove the only gate that answers a
+      # different question, so RBF always reviews at full depth.
+      if [ "$MANAGER_REVIEW_MODE" = "code" ] || [ "$phase_id" = "$FINAL_PHASE_ID" ]; then
+        printf '%s\n' \
+          'REVIEW SCOPE — code: judge delivery against the fragment first, then audit the changed source itself.' \
+          'Report every defect observable in the current evidence, including independent defects in criteria this phase did not name: incorrect logic at a changed boundary, a missing error path, an unhandled input class, a broken invariant, or a regression in behavior the phase was meant to preserve.' \
+          'When a deterministic mechanism is expected to classify natural language, audit the complete finite authority and its positive/negative equivalence classes in this batch. If no finite authority or explicit classifier contract exists, report one unsafe-ambiguity finding and use BLOCKED instead of feeding the executor an endless vocabulary expansion.' \
+          'A criterion that is technically satisfied by defective code is not PASS. Say what is wrong and why the delivered behavior does not hold.' \
+          ''
+      else
+        printf '%s\n' \
+          'REVIEW SCOPE — delivery: judge one question. Did the executor deliver what this fragment asked for?' \
+          'For each task and acceptance criterion, confirm the declared change exists at the declared scope and the stated observable outcome is evidenced by the current source, the validation rows, or the bounded evidence index.' \
+          'A criterion whose observable outcome is evidenced is PASS. Do not withhold PASS for style, naming, structure, test depth, performance, or any concern this fragment did not ask for.' \
+          'Do not open findings for defects outside the declared criteria. If you notice one, it is not this phase; leave it to a later phase, a review workflow, or an operator decision.' \
+          'FAIL or UNPROVEN belongs to a criterion the executor did not deliver or did not evidence — not to work delivered in a way you would have done differently.' \
+          'This scope narrows your judgment only. It never approves past a deterministic gate: a non-zero executor exit, a failed validation command, or a finding reopened on unchanged evidence still forces RETRY, and that conversion is made by the orchestrator, not by you.' \
+          ''
+      fi
+      printf '%s\n' \
         '--- CUMULATIVE OPEN FINDINGS ---'
       if [ -n "$(open_findings "$phase_id")" ]; then
         open_findings "$phase_id"
@@ -2125,8 +3413,23 @@ while IFS= read -r tsv_row; do
         printf '%s\n' '(none)'
       fi
       printf '%s\n' '' \
-        '--- CHANGED PATH SUMMARY (inspect current file contents in PROJECT_ROOT) ---'
+        '--- CHANGED PATH SUMMARY ---'
       cat "$CHANGED_PATHS_FILE"
+      # The reviewer used to be told to inspect PROJECT_ROOT itself, and did:
+      # an observed audit spent 194k input tokens re-reading a tree the
+      # orchestrator had already diffed. Same bytes, same moment, no round trip.
+      if [ "${AGENT_CONTEXT:-1}" != "0" ]; then
+        node "$AGENT_CONTEXT_HELPER" --mode manager \
+          --root "$PROJECT" \
+          --changes "$CHANGED_PATHS_FILE" \
+          --max-bytes "${MANAGER_CONTEXT_BYTES:-65536}" 2>/dev/null || true
+      fi
+      printf '%s\n' '' \
+        '--- BOUNDED CANONICAL EVIDENCE INDEX ---'
+      cat "$EVIDENCE_INDEX_FILE"
+      printf '%s\n' '' \
+        '--- REQUIRED ACCEPTANCE MATRIX (one RB_RALPH_CRITERION row per ID) ---'
+      node "$MANAGER_AUDIT_HELPER" expected "$PHASE_FILE"
       printf '%s\n' '' \
         '--- VALIDATED PHASE ---'
       cat "$PHASE_FILE"
@@ -2135,6 +3438,7 @@ while IFS= read -r tsv_row; do
 
     manager_try=0
     manager_retry_feedback=""
+    MANAGER_AUDIT_REPORT=""
     while :; do
       manager_try=$((manager_try + 1))
       if [ "$manager_try" -eq 1 ]; then
@@ -2147,7 +3451,7 @@ while IFS= read -r tsv_row; do
           cat "$MANAGER_PROMPT"
           printf '%s\n' '' '--- MANAGER RETRY ---' \
             "A chamada anterior do gerente não produziu uma decisão utilizável: $manager_retry_feedback" \
-            'Revise a mesma evidência. Não implemente alterações. Responda obrigatoriamente com uma linha RB_RALPH_DECISION e uma linha RB_RALPH_REASON.'
+            'Revise a mesma evidência sem implementar alterações. Complete todas as linhas ausentes ou inválidas e devolva novamente a matriz e o lote estruturado completos, RB_RALPH_AUDIT_STATUS, RB_RALPH_DECISION e RB_RALPH_REASON.'
         } > "$ACTIVE_MANAGER_PROMPT"
         ensure_prompt_budget "$ACTIVE_MANAGER_PROMPT" "$phase_id manager retry $manager_try"
       fi
@@ -2180,6 +3484,7 @@ while IFS= read -r tsv_row; do
         die "$phase_id could not verify control-plane integrity after manager review"
       fi
       rm -f -- "$MANAGER_CONTROL_DIFF"
+      record_context_compaction_signal "$ACTIVE_MANAGER_LOG" manager "$phase_id" "$attempt"
       refresh_usage_summary
 
       if provider_rate_limited "$ACTIVE_MANAGER_LOG" "$manager_rc"; then
@@ -2208,6 +3513,14 @@ while IFS= read -r tsv_row; do
         | awk '$0 == "COMPLETE" || $0 == "RETRY" || $0 == "BLOCKED" { value=$0 } END { print value }')"
       reason="$(sed -n 's/^RB_RALPH_REASON:[[:space:]]*//p' "$ACTIVE_MANAGER_LOG" | tr -d '\r' | tail -n 1)"
 
+      if [ "$manager_rc" -eq 0 ] && [ "$MANAGER_AUDIT_MODE" = "exhaustive" ]; then
+        MANAGER_AUDIT_REPORT="${ACTIVE_MANAGER_LOG%.log}-audit.json"
+        if ! node "$MANAGER_AUDIT_HELPER" validate "$PHASE_FILE" "$ACTIVE_MANAGER_LOG" > "$MANAGER_AUDIT_REPORT"; then
+          manager_retry_feedback="incomplete exhaustive audit: $(node -e 'const r=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8"));process.stdout.write((r.issues??[]).join("; "))' "$MANAGER_AUDIT_REPORT"); log=${ACTIVE_MANAGER_LOG#"$PROJECT/"}"
+          decision=""
+        fi
+      fi
+
       if [ "$manager_rc" -ne 0 ]; then
         decision=""
         reason="$(manager_failure_summary "$ACTIVE_MANAGER_LOG" "$manager_rc" "${MANAGER_PROVIDER:-custom}" "$MANAGER_MODEL")"
@@ -2218,7 +3531,8 @@ while IFS= read -r tsv_row; do
         fi
         manager_retry_feedback="$reason"
       elif [ -z "$decision" ]; then
-        manager_retry_feedback="resposta inválida: faltou RB_RALPH_DECISION válido; log=${ACTIVE_MANAGER_LOG#"$PROJECT/"}"
+        [ -n "$manager_retry_feedback" ] || \
+          manager_retry_feedback="resposta inválida: faltou RB_RALPH_DECISION válido; log=${ACTIVE_MANAGER_LOG#"$PROJECT/"}"
       elif [ -z "$reason" ]; then
         manager_retry_feedback="resposta inválida: faltou RB_RALPH_REASON; log=${ACTIVE_MANAGER_LOG#"$PROJECT/"}"
         decision=""
@@ -2263,6 +3577,7 @@ while IFS= read -r tsv_row; do
         dashboard_gate "$phase_id" 3 pass "G3 · phase accepted by technical manager"
         record_event "$phase_id" "$attempt" "COMPLETE" "$reason"
         resolve_findings "$phase_id" "$attempt" "$CURRENT_EVIDENCE_FINGERPRINT"
+        dashboard_refresh_findings
         if [ "$phase_id" = "$FINAL_PHASE_ID" ]; then
           printf '%s\n' "$OPERATIONAL_FINGERPRINT" > "$OPERATIONAL_ACCEPTED_FILE"
         fi
@@ -2292,8 +3607,11 @@ while IFS= read -r tsv_row; do
         ;;
       RETRY)
         previous_feedback="$LAST_FEEDBACK"
+        current_finding_batch="$(manager_finding_batch_fingerprint "$MANAGER_AUDIT_REPORT")"
         change_count="$(evidence_change_count "$CHANGED_PATHS_FILE")"
-        if [ -n "$previous_feedback" ] && [ "$reason" = "$previous_feedback" ]; then
+        if [ -n "$current_finding_batch" ] && [ "$current_finding_batch" = "$last_finding_batch" ]; then
+          same_feedback_count=$((same_feedback_count + 1))
+        elif [ -z "$current_finding_batch" ] && [ -n "$previous_feedback" ] && [ "$reason" = "$previous_feedback" ]; then
           same_feedback_count=$((same_feedback_count + 1))
         else
           same_feedback_count=0
@@ -2314,7 +3632,9 @@ while IFS= read -r tsv_row; do
         fi
         dashboard_gate "$phase_id" 3 fail "G3 · manager requested another implementation attempt"
         record_event "$phase_id" "$attempt" "RETRY" "$reason"
-        record_finding "$phase_id" "$attempt" "$reason" "$CURRENT_EVIDENCE_FINGERPRINT"
+        record_manager_findings "$phase_id" "$attempt" "$MANAGER_AUDIT_REPORT" \
+          "$CURRENT_EVIDENCE_FINGERPRINT" "$reason"
+        dashboard_refresh_findings
         log "$phase_id retry requested: $reason ($progress_note; stalled=$stalled_attempts/$MAX_ATTEMPTS)"
         dashboard_set_phase "$phase_id" retry "$reason · $progress_note" "$(attempt_display "$attempt" "$stalled_attempts")"
         LAST_FEEDBACK="$reason"
@@ -2322,6 +3642,7 @@ while IFS= read -r tsv_row; do
         LAST_VALIDATION_LOG="${VALIDATION_LOG#"$PROJECT/"}"
         LAST_CHANGED_PATHS="${CHANGED_PATHS_FILE#"$PROJECT/"}"
         LAST_ATTEMPT_FAILURE="$reason"
+        last_finding_batch="$current_finding_batch"
         previous_attempt="$attempt"
 
         if [ "$stalled_attempts" -ge "$MAX_ATTEMPTS" ]; then
