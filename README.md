@@ -119,7 +119,7 @@ Confirm the exact source or installed build at any time with:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.5.0
+# RB Ralph 0.5.1
 ```
 
 The installer prints and copies the same `VERSION` marker, so a source upgrade
@@ -137,9 +137,15 @@ priority over decoration.
 Start a run with its embedded TUI:
 
 ```bash
-rb-ralph --project . --provider codex --dashboard
+rb-ralph --project . --provider codex --splash --dashboard
 # --tui is an equivalent alias
 ```
+
+`--splash` plays the animated RB Ralph wordmark and capybara before execution.
+It composes correctly with `--dashboard`; `RB_RALPH_SPLASH_MS` may override its
+default 1800 ms duration. The splash is opt-in, stays silent outside a capable
+interactive terminal, and never changes execution state. Use `--no-splash` to
+override `RB_RALPH_SPLASH=1` for one invocation.
 
 The runner streams model output into its normal evidence logs while the
 dashboard owns the terminal screen. A fixed-height `LOG RECENTE` box below the

@@ -27,6 +27,7 @@ USAGE_HELPER="$RB_RALPH_HOME/lib/usage-summary.cjs"
 PROCESS_SUPERVISOR="$RB_RALPH_HOME/lib/process-supervisor.cjs"
 OPERATIONAL_VERIFIER="$RB_RALPH_HOME/lib/operational-verifier.cjs"
 CONTROL_PLANE_HELPER="$RB_RALPH_HOME/lib/control-plane.cjs"
+SPLASH_HELPER="$RB_RALPH_HOME/lib/splash.cjs"
 DASHBOARD_CLI="$RB_RALPH_HOME/bin/rb-ralph-watch"
 CORE_CLI_OPTION=""
 CORE_CLI_ENV="${RB_RALPH_CORE_CLI:-}"
@@ -88,6 +89,7 @@ MEMORY_MODE="${RB_RALPH_MEMORY_MODE:-}"
 MEMORY_TOKEN_ENV="${RB_RALPH_MEMORY_TOKEN_ENV:-RB_MEMORY_TOKEN}"
 PRICING_FILE="${RB_RALPH_PRICING_FILE:-}"
 FINAL_AUDIT="${RB_RALPH_FINAL_AUDIT:-1}"
+SPLASH="${RB_RALPH_SPLASH:-0}"
 OPERATIONAL_CONTRACT_OPTION=""
 OPERATIONAL_CONTRACT_ENV="${RB_RALPH_OPERATIONAL_CONTRACT:-}"
 OPERATIONAL_CONTRACT=""
@@ -145,7 +147,7 @@ Quick start:
   rb-ralph --project /path/to/project --plan <artifact-id> --dry-run
 
   # Execute with Codex as executor and inherited manager
-  rb-ralph --project /path/to/project --plan <artifact-id> --provider codex --dashboard
+  rb-ralph --project /path/to/project --plan <artifact-id> --provider codex --splash --dashboard
 
   # Watch the newest observable run from another terminal
   rb-ralph-watch --project /path/to/project
@@ -209,6 +211,8 @@ Options:
   --no-final-audit       Explicitly skip the final operational acceptance phase
   --yolo                 Bypass provider permissions/sandbox (default)
   --protected            Enable each provider's protected role defaults
+  --splash               Show the animated RB Ralph launch splash
+  --no-splash            Skip the launch splash (default)
   --dashboard, --tui     Show the live terminal dashboard during execution
   --watch                Watch the latest run; equivalent to rb-ralph-watch
   --dry-run              Validate and show the selected phase schedule
@@ -232,6 +236,7 @@ Environment equivalents:
   RB_RALPH_ISOLATION, RB_RALPH_MEMORY_MCP_URL, RB_RALPH_MEMORY_MODE,
   RB_RALPH_MEMORY_TOKEN_ENV, RB_RALPH_MEMORY_CLI, RB_RALPH_PRICING_FILE,
   RB_RALPH_FINAL_AUDIT, RB_RALPH_OPERATIONAL_CONTRACT,
+  RB_RALPH_SPLASH (0 or 1), RB_RALPH_SPLASH_MS,
   RB_RALPH_PERMISSION_MODE (yolo or protected; default: yolo)
 
 Provider command protocol:
@@ -1365,6 +1370,14 @@ while [ "$#" -gt 0 ]; do
       CLI_PERMISSION_MODE_SET=1
       shift
       ;;
+    --splash)
+      SPLASH=1
+      shift
+      ;;
+    --no-splash)
+      SPLASH=0
+      shift
+      ;;
     --dashboard|--tui)
       DASHBOARD=1
       shift
@@ -1414,6 +1427,10 @@ done
 case "$FINAL_AUDIT" in
   0|1) ;;
   *) die "RB_RALPH_FINAL_AUDIT must be 0 or 1" ;;
+esac
+case "$SPLASH" in
+  0|1) ;;
+  *) die "RB_RALPH_SPLASH must be 0 or 1" ;;
 esac
 case "$VALIDATION_MODE" in
   run|manager) ;;
@@ -1600,7 +1617,10 @@ configure_roles
 [ -f "$EVIDENCE_HELPER" ] || die "RB Ralph evidence helper not found: $EVIDENCE_HELPER; reinstall the complete package instead of copying only bin/rb-ralph"
 [ -f "$PROCESS_SUPERVISOR" ] || die "RB Ralph process supervisor not found: $PROCESS_SUPERVISOR; reinstall the complete package instead of copying only bin/rb-ralph"
 [ -f "$CONTROL_PLANE_HELPER" ] || die "RB Ralph control-plane helper not found: $CONTROL_PLANE_HELPER; reinstall the complete package instead of copying only bin/rb-ralph"
-if [ -t 1 ] && [ "$DASHBOARD" -eq 0 ]; then
+if [ "$SPLASH" -eq 1 ]; then
+  [ -f "$SPLASH_HELPER" ] || die "RB Ralph splash helper not found: $SPLASH_HELPER; reinstall the complete package"
+  RB_RALPH_SPLASH=1 node "$SPLASH_HELPER" --version "$RB_RALPH_VERSION"
+elif [ -t 1 ] && [ "$DASHBOARD" -eq 0 ]; then
   print_brand
   printf '\n'
 fi

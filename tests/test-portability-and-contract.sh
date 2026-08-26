@@ -164,6 +164,7 @@ INSTALL_PREFIX="$TEMP_ROOT/installed prefix"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/adapters/opencode.sh" ] || fail "installed OpenCode adapter is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/evidence.cjs" ] || fail "installed evidence helper is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/control-plane.cjs" ] || fail "installed control-plane helper is missing"
+[ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/splash.cjs" ] || fail "installed splash helper is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/process-supervisor.cjs" ] || fail "installed process supervisor is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/operational-verifier.cjs" ] || fail "installed operational verifier is missing"
 [ -f "$INSTALL_PREFIX/libexec/rb-ralph/VERSION" ] || fail "installed version marker is missing"
@@ -171,9 +172,17 @@ INSTALL_PREFIX="$TEMP_ROOT/installed prefix"
 ok "temporary-prefix installation keeps launcher and auxiliary resources together"
 "$RALPH" --ver > "$TEMP_ROOT/source-version.out"
 "$INSTALL_PREFIX/bin/rb-ralph" --version > "$TEMP_ROOT/installed-version.out"
-assert_contains "$TEMP_ROOT/source-version.out" "RB Ralph 0.5.0" "source runner reports its package version"
-assert_contains "$TEMP_ROOT/installed-version.out" "RB Ralph 0.5.0" "installed runner reports the same package version"
-assert_contains "$TEMP_ROOT/install.out" "RB Ralph 0.5.0 installed" "installer reports the installed version"
+"$INSTALL_PREFIX/bin/rb-ralph" --help > "$TEMP_ROOT/installed-help.out"
+assert_contains "$TEMP_ROOT/source-version.out" "RB Ralph 0.5.1" "source runner reports its package version"
+assert_contains "$TEMP_ROOT/installed-version.out" "RB Ralph 0.5.1" "installed runner reports the same package version"
+assert_contains "$TEMP_ROOT/install.out" "RB Ralph 0.5.1 installed" "installer reports the installed version"
+assert_contains "$TEMP_ROOT/installed-help.out" "--splash" "installed runner exposes the animated splash flag"
+node -e '
+  const { compose } = require(process.argv[1]);
+  const frame = compose("0.5.1", 100).join("\n");
+  if (!frame.includes("v0.5.1") || !frame.includes("RALPH · capivara de plantão")) process.exit(1);
+' "$INSTALL_PREFIX/libexec/rb-ralph/lib/splash.cjs"
+ok "installed splash renders the versioned RB Ralph identity"
 SPACE_PROJECT="$(new_project 'project with spaces')"
 (cd / && "$INSTALL_PREFIX/bin/rb-ralph" --project "$SPACE_PROJECT" --list) > "$TEMP_ROOT/spaces.out"
 assert_contains "$TEMP_ROOT/spaces.out" "init-minimal-execution" "installed layout supports paths containing spaces"
@@ -531,6 +540,10 @@ assert_not_contains "$BALANCE_EVENTS" $'\tMANAGER_RETRY\t' \
 assert_contains "$PACKAGE_ROOT/lib/dashboard.cjs" \
   'process.stdout.write(`\u001b[H\u001b[2J${frame}`);' \
   "live dashboard clears the complete screen before every frame"
+assert_contains "$PACKAGE_ROOT/bin/rb-ralph" 'RB_RALPH_SPLASH=1 node "$SPLASH_HELPER"' \
+  "--splash is rendered before the embedded dashboard starts"
+assert_contains "$PACKAGE_ROOT/bin/rb-ralph" 'RB_RALPH_SPLASH (0 or 1), RB_RALPH_SPLASH_MS' \
+  "splash environment controls remain discoverable"
 
 # 16. A deterministic validation failure also cannot be overridden by the manager.
 VALIDATION_FAILURE_PROJECT="$(new_project validation-failure)"
@@ -920,7 +933,7 @@ assert_contains "$TEMP_ROOT/dashboard.out" "codex[priced-model] executor / codex
   "dashboard identifies the effective model for each role"
 assert_contains "$TEMP_ROOT/dashboard.out" "RALPH · capivara de plantão" \
   "wide dashboard renders the RB Ralph mascot"
-assert_contains "$TEMP_ROOT/dashboard.out" "v0.5.0" \
+assert_contains "$TEMP_ROOT/dashboard.out" "v0.5.1" \
   "dashboard identifies the running RB Ralph version"
 assert_contains "$TEMP_ROOT/dashboard.out" "LOG RECENTE · GERENTE" \
   "dashboard shows the current role in a compact recent-log panel"
