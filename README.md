@@ -145,7 +145,7 @@ Confirm the exact source or installed build at any time with:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.9.1
+# RB Ralph 0.10.0
 ```
 
 The installer prints and copies the same `VERSION` marker, so a source upgrade
@@ -928,6 +928,49 @@ the combined patch to the primary tree when all checks succeed. Changes under
 manager. Patches that touch the same path are rejected even when their hunks
 would merge cleanly. Any overlap or conflict leaves the primary tree unchanged
 and stores individual patches under the active run's `patches/` directory.
+
+## Manager review scope
+
+`--manager-review` chooses how deeply the technical manager judges a phase.
+
+| Mode | Question it answers |
+| --- | --- |
+| `delivery` (default) | Did the executor deliver what this fragment asked for? |
+| `code` | That, plus: is the changed source itself sound? |
+
+In `delivery`, a criterion whose observable outcome is evidenced by the current
+source, the validation rows, or the evidence index is `PASS`. The manager does
+not withhold acceptance for style, naming, structure, test depth, or any concern
+the fragment did not ask for, and does not open findings for defects outside the
+declared criteria. `FAIL` and `UNPROVEN` belong to a criterion the executor did
+not deliver or did not evidence — not to work delivered in a way the reviewer
+would have done differently.
+
+In `code`, the manager judges delivery first and then audits the changed source:
+incorrect logic at a changed boundary, a missing error path, an unhandled input
+class, a broken invariant, or a regression in behavior the phase was meant to
+preserve. A criterion technically satisfied by defective code is not `PASS`.
+
+```bash
+# the default: accept a phase once the fragment was delivered
+bin/rb-ralph --project . --plan feature-example-execution --provider codex
+
+# opt in to the stricter review
+bin/rb-ralph --project . --plan feature-example-execution --provider codex \
+  --manager-review code
+```
+
+`RB_RALPH_MANAGER_REVIEW` sets the same value, and a profile may declare
+`execution.managerReview`. The built-in `strict` profile uses `code`; `balanced`
+and `fast` use `delivery`.
+
+**The scope narrows judgment only.** It never approves past a deterministic
+gate: a non-zero executor exit, a failed validation command, or a finding
+reopened on unchanged evidence still turns `COMPLETE` into `RETRY`, and that
+conversion is made by the orchestrator in code, not by the manager in a prompt.
+The final operational acceptance phase (`RBF`) also always reviews at full
+depth — it exists to exercise the real consumer boundary, which is a different
+question from whether a fragment was delivered.
 
 ## Pre-loaded repository context
 

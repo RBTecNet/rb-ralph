@@ -112,6 +112,13 @@ MANAGER_TIMEOUT="${RB_RALPH_MANAGER_TIMEOUT:-900}"
 MANAGER_IDLE_TIMEOUT="${RB_RALPH_MANAGER_IDLE_TIMEOUT:-180}"
 MANAGER_FIRST_OUTPUT_TIMEOUT="${RB_RALPH_MANAGER_FIRST_OUTPUT_TIMEOUT:-180}"
 MANAGER_AUDIT_MODE="${RB_RALPH_MANAGER_AUDIT_MODE:-exhaustive}"
+# How deeply the manager reviews. `delivery` asks one question — did the
+# executor deliver what the fragment asked for? — and accepts when it did.
+# `code` additionally audits the changed source for defects the criteria did
+# not name. Neither mode can approve past a deterministic gate: a non-zero
+# executor exit, a red validation, or a finding reopened on unchanged evidence
+# still turns COMPLETE into RETRY, in code rather than in the prompt.
+MANAGER_REVIEW_MODE="${RB_RALPH_MANAGER_REVIEW:-delivery}"
 EXECUTION_UNIT="${RB_RALPH_EXECUTION_UNIT:-task}"
 VALIDATION_MODE="${RB_RALPH_VALIDATION_MODE:-run}"
 VALIDATION_TIMEOUT="${RB_RALPH_VALIDATION_TIMEOUT:-900}"
@@ -287,6 +294,11 @@ Options:
   --manager-idle-timeout N Manager output-idle limit in seconds (default: 180; 0 disables)
   --manager-first-output-timeout N Manager first-output limit (default: 180; 0 disables)
   --manager-audit <mode> exhaustive or legacy (default: exhaustive)
+  --manager-review <mode>
+                         delivery or code (default: delivery). delivery accepts
+                         a phase once the executor delivered what the fragment
+                         asked for; code also audits the changed source for
+                         defects the criteria did not name
   --execution-unit <m>  task or phase; fresh call boundary (default: task)
   --validation-mode <m>  run or manager (default: run)
   --validation-timeout N Per-command timeout in seconds (default: 900; 0 disables)
@@ -335,6 +347,7 @@ Environment equivalents:
   RB_RALPH_AGENT_IDLE_TIMEOUT, RB_RALPH_MANAGER_TIMEOUT,
   RB_RALPH_AGENT_FIRST_OUTPUT_TIMEOUT, RB_RALPH_MANAGER_IDLE_TIMEOUT,
   RB_RALPH_MANAGER_FIRST_OUTPUT_TIMEOUT, RB_RALPH_MANAGER_AUDIT_MODE,
+  RB_RALPH_MANAGER_REVIEW,
   RB_RALPH_EXECUTION_UNIT, RB_RALPH_VALIDATION_MODE,
   RB_RALPH_VALIDATION_TIMEOUT, RB_RALPH_PARALLEL,
   RB_RALPH_MAX_PROMPT_BYTES, RB_RALPH_RATE_LIMIT_WAIT,
@@ -2072,6 +2085,8 @@ wizard_once() {
     wizard_append_value --execution-unit "$WIZARD_REPLY"
     wizard_choice "Auditoria do gerente (exhaustive/legacy)" "exhaustive" "exhaustive legacy"
     wizard_append_value --manager-audit "$WIZARD_REPLY"
+    wizard_choice "Revisão do gerente (delivery/code)" "delivery" "delivery code"
+    wizard_append_value --manager-review "$WIZARD_REPLY"
     wizard_choice "Auditoria final? (s/n)" "s" "s n"
     if [ "$WIZARD_REPLY" = "s" ]; then WIZARD_PROFILE_ARGS+=(--final-audit); else WIZARD_PROFILE_ARGS+=(--no-final-audit); fi
     wizard_choice "Dashboard? (s/n)" "s" "s n"
@@ -2334,6 +2349,11 @@ while [ "$#" -gt 0 ]; do
       MANAGER_FIRST_OUTPUT_TIMEOUT="$2"
       shift 2
       ;;
+    --manager-review)
+      [ "$#" -ge 2 ] || die "--manager-review requires delivery or code"
+      MANAGER_REVIEW_MODE="$2"
+      shift 2
+      ;;
     --manager-audit)
       [ "$#" -ge 2 ] || die "--manager-audit requires exhaustive or legacy"
       MANAGER_AUDIT_MODE="$2"
@@ -2513,6 +2533,10 @@ esac
 case "$VALIDATION_MODE" in
   run|manager) ;;
   *) die "--validation-mode must be run or manager" ;;
+esac
+case "$MANAGER_REVIEW_MODE" in
+  delivery|code) ;;
+  *) die "--manager-review must be delivery or code" ;;
 esac
 case "$MANAGER_AUDIT_MODE" in
   exhaustive|legacy) ;;
@@ -3337,6 +3361,7 @@ while IFS= read -r tsv_row; do
         'Open AGENT_LOG or VALIDATION_LOG only for a concrete unresolved matrix row; read a bounded relevant excerpt and cite its canonical path. Do not ingest complete raw transcripts by default.' \
         'Inspect current source at changed boundaries and verify every task and acceptance criterion in the validated phase below.' \
         'Do not implement or repair code in this review step.' \
+        "REVIEW_SCOPE: $MANAGER_REVIEW_MODE" \
         "Treat $ARTIFACTS_RELATIVE as read-only planning input; never edit generated specifications or fragments during review." \
         'Audit the entire matrix before deciding. Never stop after finding the first sufficient reason for RETRY.' \
         'Return every required matrix row exactly once, followed by every currently observable finding as one complete batch, then one decision and one short reason using this protocol:' \
@@ -3347,7 +3372,7 @@ while IFS= read -r tsv_row; do
         'RB_RALPH_REASON: <short evidence-based reason>' \
         '' \
         'Use COMPLETE only when every task and criterion is evidenced.' \
-        'For RETRY, emit one RB_RALPH_FINDING row for every FAIL or UNPROVEN criterion and include all defects observable from the current evidence, including independent defects in unrelated criteria.' \
+        'For RETRY, emit one RB_RALPH_FINDING row for every FAIL or UNPROVEN criterion.' \
         'Group equivalent reproductions under one root-cause finding. Do not create a new finding merely because a different input phrase exposes the same violated invariant.' \
         'Keep the finding boundary and expected state stable while that invariant remains unresolved: boundary names the canonical component or public interface, expected names the invariant, observed may list all current counterexamples, and evidence names their provenance.' \
         'When a deterministic mechanism is expected to classify natural language, audit the complete finite authority and its positive/negative equivalence classes in this batch. If no finite authority or explicit classifier contract exists, report one unsafe-ambiguity finding and use BLOCKED instead of feeding the executor an endless vocabulary expansion.' \
@@ -3357,7 +3382,30 @@ while IFS= read -r tsv_row; do
         'When AGENT_TIMED_OUT is 1, inspect all partial evidence, return RETRY, and give the next executor a concrete recovery strategy that avoids the stalled command or approach. An executor timeout is recoverable and must not be treated as a terminal implementation failure.' \
         'For RETRY, make the reason concrete enough for the executor to correct its approach on the next ephemeral call.' \
         'Use BLOCKED only when an external decision, missing authority, unavailable credential/provider, or unsafe ambiguity prevents implementation progress.' \
-        '' \
+        ''
+      # The final phase is independent product acceptance, not a source review:
+      # its whole purpose is to exercise the real consumer boundary and refuse a
+      # product that does not work. Narrowing it to "did the executor deliver
+      # what the fragment asked" would remove the only gate that answers a
+      # different question, so RBF always reviews at full depth.
+      if [ "$MANAGER_REVIEW_MODE" = "code" ] || [ "$phase_id" = "$FINAL_PHASE_ID" ]; then
+        printf '%s\n' \
+          'REVIEW SCOPE — code: judge delivery against the fragment first, then audit the changed source itself.' \
+          'Report every defect observable in the current evidence, including independent defects in criteria this phase did not name: incorrect logic at a changed boundary, a missing error path, an unhandled input class, a broken invariant, or a regression in behavior the phase was meant to preserve.' \
+          'When a deterministic mechanism is expected to classify natural language, audit the complete finite authority and its positive/negative equivalence classes in this batch. If no finite authority or explicit classifier contract exists, report one unsafe-ambiguity finding and use BLOCKED instead of feeding the executor an endless vocabulary expansion.' \
+          'A criterion that is technically satisfied by defective code is not PASS. Say what is wrong and why the delivered behavior does not hold.' \
+          ''
+      else
+        printf '%s\n' \
+          'REVIEW SCOPE — delivery: judge one question. Did the executor deliver what this fragment asked for?' \
+          'For each task and acceptance criterion, confirm the declared change exists at the declared scope and the stated observable outcome is evidenced by the current source, the validation rows, or the bounded evidence index.' \
+          'A criterion whose observable outcome is evidenced is PASS. Do not withhold PASS for style, naming, structure, test depth, performance, or any concern this fragment did not ask for.' \
+          'Do not open findings for defects outside the declared criteria. If you notice one, it is not this phase; leave it to a later phase, a review workflow, or an operator decision.' \
+          'FAIL or UNPROVEN belongs to a criterion the executor did not deliver or did not evidence — not to work delivered in a way you would have done differently.' \
+          'This scope narrows your judgment only. It never approves past a deterministic gate: a non-zero executor exit, a failed validation command, or a finding reopened on unchanged evidence still forces RETRY, and that conversion is made by the orchestrator, not by you.' \
+          ''
+      fi
+      printf '%s\n' \
         '--- CUMULATIVE OPEN FINDINGS ---'
       if [ -n "$(open_findings "$phase_id")" ]; then
         open_findings "$phase_id"

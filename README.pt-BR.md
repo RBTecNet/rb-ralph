@@ -56,7 +56,7 @@ Confira a versão:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.9.1
+# RB Ralph 0.10.0
 ```
 
 Para remover apenas os recursos identificados como pertencentes ao Ralph:
@@ -305,6 +305,50 @@ rejeitados sem sobrescrever silenciosamente o trabalho de um agente.
 
 Fases continuam sequenciais. O paralelismo ocorre apenas entre tasks
 independentes da fase atual.
+
+## Escopo de revisão do gerente
+
+`--manager-review` escolhe com que profundidade o gerente técnico julga uma fase.
+
+| Modo | Pergunta que ele responde |
+| --- | --- |
+| `delivery` (padrão) | O executor entregou o que este fragmento pedia? |
+| `code` | Isso, mais: o código alterado está correto? |
+
+Em `delivery`, um critério cujo resultado observável está evidenciado pelo código
+atual, pelas linhas de validação ou pelo índice de evidências é `PASS`. O gerente
+não retém a aceitação por estilo, nomenclatura, estrutura, profundidade de teste
+ou qualquer preocupação que o fragmento não pediu, e não abre findings para
+defeitos fora dos critérios declarados. `FAIL` e `UNPROVEN` pertencem a um
+critério que o executor não entregou ou não evidenciou — não a um trabalho
+entregue de um jeito diferente do que o revisor faria.
+
+Em `code`, o gerente julga a entrega primeiro e depois audita o código alterado:
+lógica incorreta em uma fronteira modificada, caminho de erro ausente, classe de
+entrada não tratada, invariante quebrada ou regressão em comportamento que a fase
+deveria preservar. Um critério tecnicamente satisfeito por código defeituoso não
+é `PASS`.
+
+```bash
+# o padrão: aceita a fase assim que o fragmento foi entregue
+bin/rb-ralph --project . --plan feature-example-execution --provider codex
+
+# optar pela revisão mais rigorosa
+bin/rb-ralph --project . --plan feature-example-execution --provider codex \
+  --manager-review code
+```
+
+`RB_RALPH_MANAGER_REVIEW` define o mesmo valor, e um perfil pode declarar
+`execution.managerReview`. O perfil embutido `strict` usa `code`; `balanced` e
+`fast` usam `delivery`.
+
+**O escopo estreita apenas o julgamento.** Ele nunca aprova por cima de um gate
+determinístico: saída não zero do executor, comando de validação reprovado ou
+finding reaberto sobre evidência inalterada continuam convertendo `COMPLETE` em
+`RETRY` — e essa conversão é feita pelo orquestrador em código, não pelo gerente
+em um prompt. A fase final de aceitação operacional (`RBF`) também revisa sempre
+com profundidade total: ela existe para exercitar a fronteira real do consumidor,
+que é outra pergunta.
 
 ## Contexto de repositório pré-carregado
 
