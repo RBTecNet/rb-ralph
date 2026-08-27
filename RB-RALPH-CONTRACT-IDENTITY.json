@@ -1,6 +1,6 @@
 {
   "contract": "rb-ralph-release-identity/v1",
-  "runtimeVersion": "0.10.1",
+  "runtimeVersion": "1.0.0",
   "consolidatedContract": {
     "path": "RB-RALPH-CONTRACT.md in the RB Harness contract distribution",
     "status": "historical-snapshot",

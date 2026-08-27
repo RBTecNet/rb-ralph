@@ -65,7 +65,7 @@ ok "incidental legacy completion marker is not canonical"
 # labels the older consolidated snapshot as historical rather than current.
 node "$IDENTITY" "$ROOT/VERSION" "$ROOT/RB-RALPH-CONTRACT-IDENTITY.json" >/dev/null
 cp "$ROOT/RB-RALPH-CONTRACT-IDENTITY.json" "$TEMP_ROOT/identity.json"
-sed -i 's/"0.10.1"/"0.0.0"/' "$TEMP_ROOT/identity.json"
+sed -i 's/"1.0.0"/"0.0.0"/' "$TEMP_ROOT/identity.json"
 if node "$IDENTITY" "$ROOT/VERSION" "$TEMP_ROOT/identity.json" >/dev/null 2>&1; then fail "release identity accepted a mismatched runtime"; fi
 ok "runtime and packaged contract identity metadata must agree"
 

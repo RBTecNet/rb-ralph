@@ -61,7 +61,7 @@ Confira a versão:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.10.1
+# RB Ralph 1.0.0
 ```
 
 Para remover apenas os recursos identificados como pertencentes ao Ralph:
