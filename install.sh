@@ -135,6 +135,7 @@ install -m 0755 "$SOURCE_ROOT/lib/fragment-discovery.cjs" "$INSTALL_HOME/lib/fra
 install -m 0755 "$SOURCE_ROOT/lib/profiles.cjs" "$INSTALL_HOME/lib/profiles.cjs"
 install -m 0755 "$SOURCE_ROOT/lib/agent-context.cjs" "$INSTALL_HOME/lib/agent-context.cjs"
 install -m 0755 "$SOURCE_ROOT/lib/agent-activity.cjs" "$INSTALL_HOME/lib/agent-activity.cjs"
+install -m 0755 "$SOURCE_ROOT/lib/context-efficiency.cjs" "$INSTALL_HOME/lib/context-efficiency.cjs"
 install -m 0644 "$SOURCE_ROOT/pricing.example.json" "$INSTALL_HOME/pricing.example.json"
 install -m 0644 "$SOURCE_ROOT/README.md" "$INSTALL_HOME/README.md"
 install -m 0644 "$SOURCE_ROOT/VERSION" "$INSTALL_HOME/VERSION"

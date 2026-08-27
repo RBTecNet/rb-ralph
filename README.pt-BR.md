@@ -261,6 +261,12 @@ gerente revisa e decide; ele não implementa a correção.
 de achados, agrupado por causa raiz. Isso evita corrigir uma falha por retry e
 descobrir outra que já existia na mesma entrega.
 
+No retry seguinte, `FAIL` e `UNPROVEN` estruturados selecionam somente a menor
+closure de tasks capaz de reparar o achado. Uma dependência só volta ao conjunto
+quando o finding aponta para o `Scope` dela como fronteira que precisa mudar.
+Achados sem mapeamento determinístico usam fallback conservador registrado, sem
+adivinhar uma task.
+
 ## Validação incremental
 
 No primeiro attempt da fase, o Ralph estabelece a baseline completa dos
@@ -367,9 +373,14 @@ vez de caçado:
 
 - o conteúdo atual dos arquivos que a task declara em `Scope`, ou um aviso
   nomeando os caminhos de escopo que ainda não existem;
-- os caminhos que tasks anteriores da mesma fase já mudaram;
-- a lista de arquivos do projeto, vinda do snapshot do próprio orquestrador;
-- os documentos de `Context` da fase;
+- as seções estruturadas exatas nomeadas por `Covers`, selecionadas por ID antes
+  dos prefixos não relacionados dos documentos;
+- um mapa limitado do `Scope`, arquivos existentes e nomes públicos das
+  dependências declaradas;
+- paths alterados anteriormente somente quando intersectam essas fronteiras;
+- um catálogo reduzido do produto, sem `.rb`, `.rb-harness`, `.git`,
+  dependências, caches, builds, binários, logs ou snapshots de execução;
+- os prefixos restantes dos documentos de `Context`, somente por último;
 - para o gerente, o conteúdo atual dos caminhos alterados, código primeiro,
   sem lockfiles.
 
@@ -408,8 +419,19 @@ Totais de token escondem o formato de uma chamada. Uma task observada reportou
 porquê: 34 comandos de shell em vez de ~20. Cada chamada de provider passa a
 registrar suas contagens de comandos, edições e mensagens no diretório
 `activity/` da execução, para distinguir uma task grande de um agente preso em
-redescoberta. Um stream de provider que o leitor não reconhece é reportado como
-`unmeasured`, nunca como zero.
+redescoberta. Esses contadores também aparecem ao vivo. Limites suaves apenas
+avisam; limites duros explícitos pausam de forma recuperável, preservam mudanças
+e evidências e nunca produzem `COMPLETE` artificial:
+
+```bash
+RB_RALPH_CONTEXT_SOFT_COMMAND_LIMIT=40
+RB_RALPH_CONTEXT_SOFT_OUTPUT_BYTES=1048576
+RB_RALPH_CONTEXT_HARD_COMMAND_LIMIT=0   # desabilitado por padrão
+RB_RALPH_CONTEXT_HARD_OUTPUT_BYTES=0    # desabilitado por padrão
+```
+
+Um stream de provider que o leitor não reconhece é reportado como `unmeasured`,
+nunca como zero.
 
 ## Dashboard
 
@@ -425,14 +447,23 @@ rb-ralph --project . --plan <artifact-id> \
 rb-ralph-watch --project . --plan <artifact-id> --once
 ```
 
-O painel mostra fase/task, attempt, gate, provider/model, tempo, tokens, custo
-quando mensurável, waits de rate limit e estado do circuit breaker. Telemetria
-não substitui os gates de conclusão.
+O painel mostra fase/task, attempt, gate, provider/model, tempo, bytes do prompt
+inicial, entrada cumulativa do provider, cache como parcela dessa entrada,
+entrada não cacheada derivada, saída, compactação, maiores chamadas por tokens,
+comandos e bytes de log, custo, waits e circuit breaker. Entrada cumulativa
+nunca é rotulada como tamanho de uma janela simultânea. Telemetria não substitui
+os gates de conclusão.
 
 ## Tokens e custos
 
 Adapters embutidos normalizam uso reportado pelo provider. Um arquivo de preços
 opcional permite estimativas quando custo real não é fornecido:
+
+O contrato `rb-ralph-usage/v1` mantém sua semântica. O artefato adicional
+`rb-ralph-context-efficiency/v1`, em `context-efficiency/<execution-id>/`, reúne
+prompt, entrada cumulativa, cache, entrada não cacheada, saída, comandos,
+edições, mensagens, bytes do log e sinal nativo de compactação. No Codex, cache
+é subconjunto da entrada e não é somado novamente ao total.
 
 ```bash
 cp pricing.example.json pricing.json
@@ -585,6 +616,8 @@ Esses comandos validam manifesto e plano sem criar `.rb/runs` e sem chamar IA.
 ```bash
 bash tests/test-portability-and-contract.sh
 bash tests/test-execution-parallelism.sh
+bash tests/test-agent-context.sh
+bash tests/test-context-efficiency.sh
 bash tests/test-validation-cache.sh
 ```
 

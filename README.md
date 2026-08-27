@@ -70,7 +70,7 @@ No auxiliary resource is written directly to `/bin`. The layout is:
     ├── bin/{rb-ralph,rb-ralph-watch}
     ├── adapters/{adapter-utils,api,codex,claude,opencode}.sh
     ├── core/rb-harness.cjs
-    ├── lib/{evidence,evidence-index,validation-cache,manager-audit,control-plane,process-supervisor,operational-verifier,fragment-discovery,profiles,provider-telemetry,usage-summary,dashboard}.cjs
+    ├── lib/{agent-context,agent-activity,context-efficiency,evidence,evidence-index,validation-cache,manager-audit,control-plane,process-supervisor,operational-verifier,fragment-discovery,profiles,provider-telemetry,usage-summary,dashboard}.cjs
     ├── VERSION
     ├── pricing.example.json
     └── README.md
@@ -312,7 +312,8 @@ a run:
 
 While a provider call is active, an orchestrator-owned metadata side channel
 reports process state, elapsed time, first-byte latency, observed byte count,
-CPU/I/O activity age, and timeout countdowns. It never contains provider text.
+CPU/I/O activity age, completed commands, edits, messages, time since the last
+edit, soft-limit warnings, and timeout countdowns. It never contains provider text.
 The dashboard therefore distinguishes a started process, active-but-silent
 inference, idle silence, first output, and timeout instead of claiming only
 that it is waiting for an unknown provider event. Canonical raw role logs are
@@ -327,8 +328,10 @@ rb-ralph-watch --project /path/to/project --once --no-color
 ```
 
 The panel shows run duration and status, current phase/activity/attempt,
-phase/task progress, provider calls, input tokens, cache reads, cache writes,
-output tokens, total tokens, and cost availability. Every phase also exposes
+phase/task progress, provider calls, initial prompt bytes, cumulative provider
+input, the cached subset, derived uncached input, output, compaction signals,
+top calls by input/commands/log bytes, and cost availability. Cumulative input
+is never presented as the size of one simultaneous context window. Every phase also exposes
 four live gates: `G0` executor exit, `G1` changed-code evidence, `G2`
 deterministic validations, and `G3` technical-manager decision. Their states
 are pending, running, passed, failed, or delegated/skipped. The dashboard
@@ -358,6 +361,14 @@ mode. Each provider call writes one `rb-ralph-usage/v1` record under
 a new execution directory: the dashboard and `usage-summary.tsv` report only
 the current invocation, while records from earlier invocations remain available
 for audit without leaking old provider/model names into the live panel.
+
+The stable usage record keeps its existing semantics. A parallel additive
+`rb-ralph-context-efficiency/v1` record under
+`context-efficiency/<execution-id>/` combines prompt bytes, cumulative provider
+input, cached and derived uncached input, output, commands, edits, messages,
+provider-log bytes, and native compaction signals. Providers without usage
+remain `unmeasured`, never zero. For Codex, cached input is a subset of input
+and is not added to `totalTokens` again.
 
 - Codex JSONL supplies measured input, cached-input, and output tokens.
 - Claude JSON supplies its cache token classes and, when returned by Claude
@@ -989,9 +1000,13 @@ instead of being hunted:
 
 - the current content of the files the task declares in `Scope`, or a note
   naming the scope paths that do not exist yet;
-- the paths earlier tasks in the same phase already changed;
-- the project file list from the orchestrator's own snapshot;
-- the phase's `Context` documents;
+- exact structured sections named by `Covers`, selected by ID before unrelated
+  document prefixes;
+- a bounded map of declared dependency scopes, existing files, and public names;
+- earlier changed paths only when they intersect those task boundaries;
+- a reduced product file list that excludes `.rb`, `.rb-harness`, `.git`,
+  dependencies, caches, builds, binaries, logs, and execution snapshots;
+- remaining phase `Context` prefixes only after the higher-priority sections;
 - for the manager, the current content of the changed paths, source first,
   lockfiles left out.
 
@@ -1028,8 +1043,18 @@ Token totals hide the shape of a call. One observed task reported 1.52M input
 tokens against neighbours at ~500k, and only its raw log showed why: 34 shell
 commands instead of ~20. Each provider call now records its command, edit, and
 message counts under the run's `activity/` directory, so a large task can be
-told apart from an agent looping on rediscovery. A provider stream this cannot
-read is reported as `unmeasured`, never as zero.
+told apart from an agent looping on rediscovery. These counters are also live.
+Soft command/output limits only warn. Explicit hard limits pause recoverably,
+preserve changes and evidence, and can never synthesize `COMPLETE`:
+
+```bash
+RB_RALPH_CONTEXT_SOFT_COMMAND_LIMIT=40
+RB_RALPH_CONTEXT_SOFT_OUTPUT_BYTES=1048576
+RB_RALPH_CONTEXT_HARD_COMMAND_LIMIT=0   # disabled by default
+RB_RALPH_CONTEXT_HARD_OUTPUT_BYTES=0    # disabled by default
+```
+
+A provider stream this cannot read is reported as `unmeasured`, never as zero.
 
 
 Use Claude Code for both roles:
@@ -1324,6 +1349,12 @@ path is outside the declared scopes, a scope is not machine-bounded, or changed
 path collection is incomplete, every unique command runs again. Each executed
 command has a 900-second timeout when GNU `timeout` is available:
 
+The next executor set is localized independently from validation: structured
+`FAIL`/`UNPROVEN` criteria map to their owning task, and a dependency is added
+only when the finding names its scope as a boundary that must change. Findings
+without a deterministic task mapping use an explicitly recorded conservative
+fallback instead of guessing.
+
 ```bash
 bin/rb-ralph --project . --provider codex \
   --validation-timeout 600
@@ -1377,6 +1408,8 @@ Run the portable runner contract suite from the workspace root:
 ```bash
 bash tests/test-portability-and-contract.sh
 bash tests/test-execution-parallelism.sh
+bash tests/test-agent-context.sh
+bash tests/test-context-efficiency.sh
 bash tests/test-validation-cache.sh
 ```
 
@@ -1402,8 +1435,8 @@ reuse, and conservative full fallback.
 - Worktree isolation currently applies to parallel task agents; a sequential
   phase agent works in the primary tree.
 - Built-in providers have normalized token accounting, but custom adapters may
-  remain explicitly unmeasured and semantic context compaction is not yet
-  implemented.
+  remain explicitly unmeasured. Provider-native compaction signals are exposed;
+  Ralph does not infer a real context-window peak when the provider omits it.
 - Configured cost estimation is linear per token class. It does not model
   context-length tiers, service tiers, tool-call fees, taxes, subscription
   allowances, or currency conversion; provider-reported cost remains preferred.

@@ -1204,10 +1204,14 @@ RB_RALPH_WATCH_COLS=120 RB_RALPH_WATCH_LINES=50 \
   --once --no-color > "$TEMP_ROOT/dashboard.out"
 assert_contains "$TEMP_ROOT/dashboard.out" "CHAMADAS 2  medidas 2  sem métrica 0" \
   "dashboard reports measured provider calls"
-assert_contains "$TEMP_ROOT/dashboard.out" "TOKENS entrada 2,000  cache↙ 400" \
-  "dashboard reports input and cache token statistics"
-assert_contains "$TEMP_ROOT/dashboard.out" "saída 200  total 2,200" \
-  "dashboard reports output and total token statistics"
+assert_contains "$TEMP_ROOT/dashboard.out" "ENTRADA ACUMULADA 2,000  cache (parcela) 400" \
+  "dashboard labels cumulative provider input and cache as its subset"
+assert_contains "$TEMP_ROOT/dashboard.out" "não cache 1,600  saída 200" \
+  "dashboard reports derived uncached input without double counting cache"
+assert_contains "$TEMP_ROOT/dashboard.out" "PROMPT INICIAL" \
+  "dashboard distinguishes initial prompt size from cumulative provider input"
+assert_contains "$TEMP_ROOT/dashboard.out" "TOP entrada" \
+  "dashboard ranks the largest context consumers"
 assert_contains "$TEMP_ROOT/dashboard.out" "USD 0.005400 (configured-pricing)" \
   "dashboard labels costs estimated from explicit pricing"
 assert_contains "$TEMP_ROOT/dashboard.out" "G0 ✓  G1 ✓  G2 ⊘  G3 ✓" \

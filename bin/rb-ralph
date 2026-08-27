@@ -29,6 +29,7 @@ EVIDENCE_INDEX_HELPER="$RB_RALPH_HOME/lib/evidence-index.cjs"
 VALIDATION_CACHE_HELPER="$RB_RALPH_HOME/lib/validation-cache.cjs"
 AGENT_CONTEXT_HELPER="$RB_RALPH_HOME/lib/agent-context.cjs"
 AGENT_ACTIVITY_HELPER="$RB_RALPH_HOME/lib/agent-activity.cjs"
+CONTEXT_EFFICIENCY_HELPER="$RB_RALPH_HOME/lib/context-efficiency.cjs"
 MANAGER_AUDIT_HELPER="$RB_RALPH_HOME/lib/manager-audit.cjs"
 OPERATIONAL_VERIFIER="$RB_RALPH_HOME/lib/operational-verifier.cjs"
 CONTROL_PLANE_HELPER="$RB_RALPH_HOME/lib/control-plane.cjs"
@@ -133,6 +134,10 @@ ISOLATION="${RB_RALPH_ISOLATION:-shared}"
 AGENT_CONTEXT="${RB_RALPH_AGENT_CONTEXT:-1}"
 AGENT_CONTEXT_BYTES="${RB_RALPH_AGENT_CONTEXT_BYTES:-49152}"
 MANAGER_CONTEXT_BYTES="${RB_RALPH_MANAGER_CONTEXT_BYTES:-65536}"
+CONTEXT_SOFT_COMMAND_LIMIT="${RB_RALPH_CONTEXT_SOFT_COMMAND_LIMIT:-40}"
+CONTEXT_SOFT_OUTPUT_BYTES="${RB_RALPH_CONTEXT_SOFT_OUTPUT_BYTES:-1048576}"
+CONTEXT_HARD_COMMAND_LIMIT="${RB_RALPH_CONTEXT_HARD_COMMAND_LIMIT:-0}"
+CONTEXT_HARD_OUTPUT_BYTES="${RB_RALPH_CONTEXT_HARD_OUTPUT_BYTES:-0}"
 MEMORY_MCP_URL="${RB_RALPH_MEMORY_MCP_URL:-}"
 MEMORY_MODE="${RB_RALPH_MEMORY_MODE:-}"
 MEMORY_TOKEN_ENV="${RB_RALPH_MEMORY_TOKEN_ENV:-RB_MEMORY_TOKEN}"
@@ -312,6 +317,10 @@ Options:
                          tree into the executor prompt (it is on by default)
   --agent-context-bytes <n>
                          Byte budget for that pre-loaded context (default: 49152)
+  Context activity limits are configured with RB_RALPH_CONTEXT_SOFT_COMMAND_LIMIT,
+  RB_RALPH_CONTEXT_SOFT_OUTPUT_BYTES, RB_RALPH_CONTEXT_HARD_COMMAND_LIMIT, and
+  RB_RALPH_CONTEXT_HARD_OUTPUT_BYTES. Soft limits only warn; hard limits default
+  to 0 (disabled) and pause recoverably when explicitly enabled.
   --memory-url <url>     Optional RB Memory Streamable HTTP MCP URL
   --memory-mode <mode>   off, required, or best-effort (default: required with URL)
   --memory-token-env <n> Bearer-token environment variable (default: RB_MEMORY_TOKEN)
@@ -352,6 +361,8 @@ Environment equivalents:
   RB_RALPH_VALIDATION_TIMEOUT, RB_RALPH_PARALLEL,
   RB_RALPH_MAX_PROMPT_BYTES, RB_RALPH_RATE_LIMIT_WAIT,
   RB_RALPH_MAX_RATE_LIMIT_WAITS, RB_RALPH_MAX_RATE_LIMIT_WAIT,
+  RB_RALPH_CONTEXT_SOFT_COMMAND_LIMIT, RB_RALPH_CONTEXT_SOFT_OUTPUT_BYTES,
+  RB_RALPH_CONTEXT_HARD_COMMAND_LIMIT, RB_RALPH_CONTEXT_HARD_OUTPUT_BYTES,
   RB_RALPH_ISOLATION, RB_RALPH_MEMORY_MCP_URL, RB_RALPH_MEMORY_MODE,
   RB_RALPH_MEMORY_TOKEN_ENV, RB_RALPH_MEMORY_CLI, RB_RALPH_PRICING_FILE,
   RB_RALPH_FINAL_AUDIT, RB_RALPH_OPERATIONAL_CONTRACT,
@@ -1027,6 +1038,10 @@ write_agent_prompt() {
     fi
     printf '%s\n' \
       'Open referenced context or raw evidence only for a concrete unresolved criterion. Prefer exact files and relevant sections; do not reread whole plans, transcripts, or successful logs by default.' \
+      'Use rg to locate a symbol or exact criterion before opening another file. Read bounded line ranges around the match; do not print whole directories or broad files by default.' \
+      'Never print complete lockfiles, generated bundles, prior provider logs, execution snapshots, or previous run transcripts. Limit find/rg results and refine any query whose result is broad.' \
+      'Do not repeat a read whose output is already present in this fresh call context. Every broad read must name the still-unresolved acceptance criterion it is intended to prove.' \
+      'Run the focused validation for this task first. Run broader suites only after the focused boundary passes and only to the extent needed to prove integration or regression safety.' \
       'Authority order is: validated work-item extract, current repository state, canonical validation/evidence files, then advisory memory or prior narrative.' \
       'Respect existing code and tests. Re-check existing work before editing so retries remain idempotent.' \
       'Do not alter RB contracts or claim completion without evidence.' \
@@ -1113,6 +1128,10 @@ invoke_agent() {
       --input "$prompt" --output "$provider_output" \
       --idle-timeout "$AGENT_IDLE_TIMEOUT" --first-output-timeout "$AGENT_FIRST_OUTPUT_TIMEOUT" \
       --timeout "$AGENT_TIMEOUT" --status "$live_status" \
+      --soft-command-limit "$CONTEXT_SOFT_COMMAND_LIMIT" \
+      --soft-output-bytes "$CONTEXT_SOFT_OUTPUT_BYTES" \
+      --hard-command-limit "$CONTEXT_HARD_COMMAND_LIMIT" \
+      --hard-output-bytes "$CONTEXT_HARD_OUTPUT_BYTES" \
       --label executor -- "$AGENT_CMD"
   ); then
     agent_result=0
@@ -1137,6 +1156,7 @@ invoke_agent() {
     mkdir -p "$(dirname "$telemetry")"
     mv "$temporary_telemetry" "$telemetry"
   fi
+  record_context_efficiency "$prompt" "$output" "$telemetry"
   if find "$submission_dir" -mindepth 1 -print -quit | grep -q .; then
     submission_target="$STATE_DIR/evidence/$(basename "${output%.log}")-agent-submission"
     mkdir -p "$submission_target"
@@ -1188,6 +1208,10 @@ invoke_manager() {
       --input "$prompt" --output "$provider_output" \
       --idle-timeout "$MANAGER_IDLE_TIMEOUT" --first-output-timeout "$MANAGER_FIRST_OUTPUT_TIMEOUT" \
       --timeout "$MANAGER_TIMEOUT" --status "$live_status" \
+      --soft-command-limit "$CONTEXT_SOFT_COMMAND_LIMIT" \
+      --soft-output-bytes "$CONTEXT_SOFT_OUTPUT_BYTES" \
+      --hard-command-limit "$CONTEXT_HARD_COMMAND_LIMIT" \
+      --hard-output-bytes "$CONTEXT_HARD_OUTPUT_BYTES" \
       --label manager -- "$MANAGER_CMD"
   ); then
     manager_result=0
@@ -1202,6 +1226,7 @@ invoke_manager() {
     mkdir -p "$(dirname "$telemetry")"
     mv "$temporary_telemetry" "$telemetry"
   fi
+  record_context_efficiency "$prompt" "$output" "$telemetry"
   case "$capture_root" in
     "${TMPDIR:-/tmp}"/rb-ralph-manager-capture.*) rm -rf -- "$capture_root" ;;
   esac
@@ -1321,6 +1346,18 @@ refresh_usage_summary() {
   local arguments=("$USAGE_DIR" "$USAGE_SUMMARY_FILE")
   [ -z "$PRICING_FILE" ] || arguments+=("$PRICING_FILE")
   node "$USAGE_HELPER" "${arguments[@]}" || log "usage telemetry summary could not be refreshed"
+  node "$CONTEXT_EFFICIENCY_HELPER" summary \
+    "$CONTEXT_EFFICIENCY_DIR" "$CONTEXT_EFFICIENCY_SUMMARY_FILE" \
+    || log "context efficiency summary could not be refreshed"
+}
+
+record_context_efficiency() {
+  local prompt="$1" provider_log="$2" telemetry="$3" target
+  [ -f "$prompt" ] && [ -f "$provider_log" ] && [ -f "$telemetry" ] || return 0
+  mkdir -p "$CONTEXT_EFFICIENCY_DIR"
+  target="$CONTEXT_EFFICIENCY_DIR/$(basename "${provider_log%.log}").json"
+  node "$CONTEXT_EFFICIENCY_HELPER" record "$prompt" "$provider_log" "$telemetry" "$target" \
+    || log "context efficiency record could not be published for $(basename "$provider_log")"
 }
 
 usage_placeholder() {
@@ -1338,7 +1375,9 @@ dashboard_state_init() {
   DASHBOARD_EXECUTION_ID="${DASHBOARD_STARTED}-$$"
   USAGE_DIR="$STATE_DIR/usage/$DASHBOARD_EXECUTION_ID"
   USAGE_SUMMARY_FILE="$STATE_DIR/usage-summary.tsv"
-  mkdir -p "$USAGE_DIR"
+  CONTEXT_EFFICIENCY_DIR="$STATE_DIR/context-efficiency/$DASHBOARD_EXECUTION_ID"
+  CONTEXT_EFFICIENCY_SUMMARY_FILE="$STATE_DIR/context-efficiency-summary.tsv"
+  mkdir -p "$USAGE_DIR" "$CONTEXT_EFFICIENCY_DIR"
   local temporary="$DASHBOARD_PLAN_FILE.tmp.$$" row task_row
   local dash_phase_id dash_number dash_task_count dash_pending dash_depends dash_title
   local dash_task_id dash_done dash_parallel dash_task_depends dash_task_title dash_status dash_index
@@ -1727,7 +1766,8 @@ reset_task_call_outputs() {
   # would make the control-plane snapshot read the orchestrator's own
   # bookkeeping as forged evidence. This applies to a phase call as much as to
   # a task call, so it runs before the execution-unit check.
-  rm -f -- "$AGENT_PROMPT" "$STATE_DIR/activity/$(basename "${AGENT_LOG%.log}").tsv"
+  rm -f -- "$AGENT_PROMPT" "$STATE_DIR/activity/$(basename "${AGENT_LOG%.log}").tsv" \
+    "$CONTEXT_EFFICIENCY_DIR/$(basename "${AGENT_LOG%.log}").json"
   [ "$EXECUTION_UNIT" = "task" ] || return 0
   local current_task task_log task_usage task_submission task_prompt task_activity
   rm -f -- "$AGENT_LOG"
@@ -1742,9 +1782,72 @@ reset_task_call_outputs() {
     # place would make the control-plane snapshot read that as forged evidence.
     task_prompt="$STATE_DIR/prompts/$phase_id-$current_task-attempt-$attempt-agent.txt"
     task_activity="$STATE_DIR/activity/$phase_id-$current_task-attempt-$attempt-agent.tsv"
-    rm -f -- "$task_log" "$task_usage" "$task_prompt" "$task_activity"
+    rm -f -- "$task_log" "$task_usage" "$task_prompt" "$task_activity" \
+      "$CONTEXT_EFFICIENCY_DIR/$(basename "${task_log%.log}").json"
     [ ! -d "$task_submission" ] || rm -rf -- "$task_submission"
   done
+}
+
+configure_pending_tasks() {
+  local selection="${1:-*}" task_row task_done task_parallel task_title pending_set dependency_id
+  PENDING_TASK_IDS=()
+  PENDING_TASK_DEPS=()
+  all_pending_parallel=1
+  while IFS= read -r task_row; do
+    IFS="$TSV_SEPARATOR" read -r task_id task_done task_parallel task_depends task_title \
+      <<< "${task_row//$'\t'/$TSV_SEPARATOR}"
+    [ "$task_id" = "task_id" ] && continue
+    [ "$task_done" = "false" ] || continue
+    if [ "$selection" != "*" ] && [[ ",$selection," != *",$task_id,"* ]]; then continue; fi
+    PENDING_TASK_IDS+=("$task_id")
+    PENDING_TASK_DEPS+=("$task_depends")
+    [ "$task_parallel" = "true" ] || all_pending_parallel=0
+  done <<< "$TASKS"
+
+  pending_set=","
+  for task_id in "${PENDING_TASK_IDS[@]+"${PENDING_TASK_IDS[@]}"}"; do pending_set+="$task_id,"; done
+  for task_depends in "${PENDING_TASK_DEPS[@]+"${PENDING_TASK_DEPS[@]}"}"; do
+    IFS=',' read -r -a dependency_ids <<< "$task_depends"
+    for dependency_id in "${dependency_ids[@]+"${dependency_ids[@]}"}"; do
+      [ -z "$dependency_id" ] && continue
+      if [[ "$pending_set" == *",$dependency_id,"* ]]; then all_pending_parallel=0; fi
+    done
+  done
+  use_parallel=0
+  if [ "$PARALLEL_LIMIT" -gt 1 ] && [ "${#PENDING_TASK_IDS[@]}" -gt 1 ] && [ "$all_pending_parallel" -eq 1 ]; then
+    use_parallel=1
+  fi
+  if [ "$use_parallel" -eq 1 ] && [ "$ISOLATION" != "worktree" ]; then
+    die "$phase_id has parallel-safe tasks, but parallel execution requires --isolation worktree to prevent agent interference"
+  fi
+}
+
+localize_retry_tasks() {
+  local report="$1" selection_file selection_csv selection_rc=0
+  selection_file="$STATE_DIR/evidence/$phase_id-attempt-$attempt-retry-selection.json"
+  if [ -s "$report" ]; then
+    node "$MANAGER_AUDIT_HELPER" retry-selection "$TASK_DETAILS_FILE" "$report" > "$selection_file" \
+      || selection_rc=$?
+  else
+    selection_rc=3
+    printf '%s\n' '{"contract":"rb-ralph-retry-selection/v1","localized":false,"fallback":true,"taskIds":[],"criteria":[],"reason":"manager report has no structured task IDs"}' > "$selection_file"
+  fi
+  if [ "$selection_rc" -eq 0 ]; then
+    selection_csv="$(node -e 'const r=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8"));process.stdout.write((r.taskIds??[]).join(","))' "$selection_file")"
+  else
+    selection_csv=""
+  fi
+  if [ -n "$selection_csv" ]; then
+    configure_pending_tasks "$selection_csv"
+    record_event "$phase_id" "$attempt" "RETRY_SCOPE_LOCALIZED" \
+      "next executor task closure=$selection_csv; selection=${selection_file#"$PROJECT/"}"
+    log "$phase_id localized retry to task closure: $selection_csv"
+  else
+    configure_pending_tasks "*"
+    record_event "$phase_id" "$attempt" "RETRY_SCOPE_FALLBACK" \
+      "structured finding lacked a deterministic task mapping; conservatively repeating declared pending tasks; selection=${selection_file#"$PROJECT/"}"
+    log "$phase_id retry scope fallback: manager finding did not identify a deterministic task closure"
+  fi
 }
 
 resolve_artifacts_directory() {
@@ -2522,6 +2625,10 @@ done
 [[ "$RATE_LIMIT_WAIT" =~ ^[0-9]+$ ]] || die "--rate-limit-wait must be a non-negative integer"
 [[ "$MAX_RATE_LIMIT_WAITS" =~ ^[0-9]+$ ]] || die "--max-limit-waits must be a non-negative integer"
 [[ "$MAX_RATE_LIMIT_WAIT" =~ ^[0-9]+$ ]] || die "--max-limit-wait must be a non-negative integer"
+[[ "$CONTEXT_SOFT_COMMAND_LIMIT" =~ ^[0-9]+$ ]] || die "RB_RALPH_CONTEXT_SOFT_COMMAND_LIMIT must be a non-negative integer"
+[[ "$CONTEXT_SOFT_OUTPUT_BYTES" =~ ^[0-9]+$ ]] || die "RB_RALPH_CONTEXT_SOFT_OUTPUT_BYTES must be a non-negative integer"
+[[ "$CONTEXT_HARD_COMMAND_LIMIT" =~ ^[0-9]+$ ]] || die "RB_RALPH_CONTEXT_HARD_COMMAND_LIMIT must be a non-negative integer"
+[[ "$CONTEXT_HARD_OUTPUT_BYTES" =~ ^[0-9]+$ ]] || die "RB_RALPH_CONTEXT_HARD_OUTPUT_BYTES must be a non-negative integer"
 case "$FINAL_AUDIT" in
   0|1) ;;
   *) die "RB_RALPH_FINAL_AUDIT must be 0 or 1" ;;
@@ -2768,6 +2875,7 @@ configure_roles
 [ -f "$EVIDENCE_INDEX_HELPER" ] || die "RB Ralph evidence-index helper not found: $EVIDENCE_INDEX_HELPER; reinstall the complete package"
 [ -f "$VALIDATION_CACHE_HELPER" ] || die "RB Ralph validation-cache helper not found: $VALIDATION_CACHE_HELPER; reinstall the complete package"
 [ -f "$MANAGER_AUDIT_HELPER" ] || die "RB Ralph manager-audit helper not found: $MANAGER_AUDIT_HELPER; reinstall the complete package"
+[ -f "$CONTEXT_EFFICIENCY_HELPER" ] || die "RB Ralph context-efficiency helper not found: $CONTEXT_EFFICIENCY_HELPER; reinstall the complete package"
 [ -f "$CONTROL_PLANE_HELPER" ] || die "RB Ralph control-plane helper not found: $CONTROL_PLANE_HELPER; reinstall the complete package instead of copying only bin/rb-ralph"
 if [ -t 1 ] && [ "$DASHBOARD" -eq 0 ]; then
   print_brand
@@ -2905,39 +3013,7 @@ while IFS= read -r tsv_row; do
     printf 'PAUSED: %s\n' "$human_reason" >&2
     exit 2
   fi
-  PENDING_TASK_IDS=()
-  PENDING_TASK_DEPS=()
-  all_pending_parallel=1
-  while IFS= read -r task_row; do
-    IFS="$TSV_SEPARATOR" read -r task_id task_done task_parallel task_depends task_title \
-      <<< "${task_row//$'\t'/$TSV_SEPARATOR}"
-    [ "$task_id" = "task_id" ] && continue
-    [ "$task_done" = "false" ] || continue
-    PENDING_TASK_IDS+=("$task_id")
-    PENDING_TASK_DEPS+=("$task_depends")
-    [ "$task_parallel" = "true" ] || all_pending_parallel=0
-  done <<< "$TASKS"
-
-  pending_set=","
-  for task_id in "${PENDING_TASK_IDS[@]+"${PENDING_TASK_IDS[@]}"}"; do
-    pending_set+="$task_id,"
-  done
-  for task_depends in "${PENDING_TASK_DEPS[@]+"${PENDING_TASK_DEPS[@]}"}"; do
-    IFS=',' read -r -a dependency_ids <<< "$task_depends"
-    for dependency_id in "${dependency_ids[@]+"${dependency_ids[@]}"}"; do
-      [ -z "$dependency_id" ] && continue
-      if [[ "$pending_set" == *",$dependency_id,"* ]]; then
-        all_pending_parallel=0
-      fi
-    done
-  done
-  use_parallel=0
-  if [ "$PARALLEL_LIMIT" -gt 1 ] && [ "${#PENDING_TASK_IDS[@]}" -gt 1 ] && [ "$all_pending_parallel" -eq 1 ]; then
-    use_parallel=1
-  fi
-  if [ "$use_parallel" -eq 1 ] && [ "$ISOLATION" != "worktree" ]; then
-    die "$phase_id has parallel-safe tasks, but parallel execution requires --isolation worktree to prevent agent interference"
-  fi
+  configure_pending_tasks "*"
   completed=0
   attempt="$(next_phase_attempt "$phase_id")"
   previous_attempt=$((attempt - 1))
@@ -3181,6 +3257,20 @@ while IFS= read -r tsv_row; do
     node "$EVIDENCE_HELPER" diff "$PROJECT" "$BEFORE_SNAPSHOT" "$CHANGED_PATHS_FILE" \
       || die "$phase_id could not capture changed-path evidence"
     change_count="$(evidence_change_count "$CHANGED_PATHS_FILE")"
+    if grep -Fq 'RB_RALPH_PROCESS_STATUS: CONTEXT_LIMIT_PAUSE' "$AGENT_LOG"; then
+      context_limit_kind="$(sed -n 's/^RB_RALPH_CONTEXT_LIMIT_KIND:[[:space:]]*//p' "$AGENT_LOG" | tail -n 1)"
+      context_limit_observed="$(sed -n 's/^RB_RALPH_CONTEXT_LIMIT_OBSERVED:[[:space:]]*//p' "$AGENT_LOG" | tail -n 1)"
+      context_limit_configured="$(sed -n 's/^RB_RALPH_CONTEXT_LIMIT_CONFIGURED:[[:space:]]*//p' "$AGENT_LOG" | tail -n 1)"
+      pause_reason="limite duro explícito de contexto atingido (${context_limit_kind:-unknown}: ${context_limit_observed:-?}/${context_limit_configured:-?}); alterações em $change_count caminho(s) e evidência foram preservadas; retome com um limite ajustado ou uma tarefa menor"
+      record_event "$phase_id" "$attempt" "PAUSED_CONTEXT_LIMIT" "$pause_reason"
+      dashboard_gate "$phase_id" 1 pass "G1 · partial changed-code evidence preserved"
+      dashboard_set_phase "$phase_id" paused "$pause_reason" "$(attempt_display "$attempt" "$stalled_attempts")"
+      refresh_usage_summary
+      dashboard_finish paused
+      wait_dashboard
+      printf 'PAUSED: %s\n' "$pause_reason" >&2
+      exit 2
+    fi
     if [ "$agent_rc" -eq 0 ] && [ "$change_count" -eq 0 ] \
       && [ -n "$AGENT_PROVIDER" ] \
       && ! grep -Fq 'RB_RALPH_EXECUTOR_STATUS: COMPLETE' "$AGENT_LOG"; then
@@ -3487,6 +3577,15 @@ while IFS= read -r tsv_row; do
       record_context_compaction_signal "$ACTIVE_MANAGER_LOG" manager "$phase_id" "$attempt"
       refresh_usage_summary
 
+      if grep -Fq 'RB_RALPH_PROCESS_STATUS: CONTEXT_LIMIT_PAUSE' "$ACTIVE_MANAGER_LOG"; then
+        manager_limit_kind="$(sed -n 's/^RB_RALPH_CONTEXT_LIMIT_KIND:[[:space:]]*//p' "$ACTIVE_MANAGER_LOG" | tail -n 1)"
+        manager_limit_observed="$(sed -n 's/^RB_RALPH_CONTEXT_LIMIT_OBSERVED:[[:space:]]*//p' "$ACTIVE_MANAGER_LOG" | tail -n 1)"
+        manager_limit_configured="$(sed -n 's/^RB_RALPH_CONTEXT_LIMIT_CONFIGURED:[[:space:]]*//p' "$ACTIVE_MANAGER_LOG" | tail -n 1)"
+        decision="PAUSED"
+        reason="limite duro explícito de contexto do gerente atingido (${manager_limit_kind:-unknown}: ${manager_limit_observed:-?}/${manager_limit_configured:-?}); evidência do executor permanece preservada e o gerente pode ser retomado sem repetir implementação"
+        break
+      fi
+
       if provider_rate_limited "$ACTIVE_MANAGER_LOG" "$manager_rc"; then
         rate_limit_waits=$((rate_limit_waits + 1))
         if [ "$rate_limit_waits" -gt "$MAX_RATE_LIMIT_WAITS" ]; then
@@ -3634,6 +3733,7 @@ while IFS= read -r tsv_row; do
         record_event "$phase_id" "$attempt" "RETRY" "$reason"
         record_manager_findings "$phase_id" "$attempt" "$MANAGER_AUDIT_REPORT" \
           "$CURRENT_EVIDENCE_FINGERPRINT" "$reason"
+        localize_retry_tasks "$MANAGER_AUDIT_REPORT"
         dashboard_refresh_findings
         log "$phase_id retry requested: $reason ($progress_note; stalled=$stalled_attempts/$MAX_ATTEMPTS)"
         dashboard_set_phase "$phase_id" retry "$reason · $progress_note" "$(attempt_display "$attempt" "$stalled_attempts")"

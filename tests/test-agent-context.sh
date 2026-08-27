@@ -33,16 +33,63 @@ refute() {
 }
 
 PROJECT="$WORK/project"
-mkdir -p "$PROJECT/src/explain" "$PROJECT/tests/explain" "$PROJECT/.rb/init" "$WORK/state"
+mkdir -p "$PROJECT/src/explain" "$PROJECT/tests/explain" "$PROJECT/.rb/init" \
+  "$PROJECT/internal/policy" "$PROJECT/.rb/runs/noise" "$PROJECT/.rb-harness/runs/noise" \
+  "$PROJECT/.git/objects" "$PROJECT/node_modules/pkg" "$PROJECT/vendor/pkg" \
+  "$PROJECT/build" "$PROJECT/logs" "$WORK/state"
 printf 'export const marker = "scope-source";\n' > "$PROJECT/src/explain/linux-user.ts"
 printf 'import { marker } from "../../src/explain/linux-user";\n' > "$PROJECT/tests/explain/linux-user.test.ts"
 printf '# PROJECT\n\nMarker: context-document.\n' > "$PROJECT/.rb/init/PROJECT.md"
+cat > "$PROJECT/.rb/init/REQUIREMENTS.md" <<'REQUIREMENTS'
+# Requirements
+
+### RF-001 — Early unrelated requirement
+
+early-rf-001-must-not-displace-covered-sections
+
+### RF-014 — Covered fourteen
+
+exact-rf-014
+
+### RF-015 — Covered fifteen
+
+exact-rf-015
+
+### RF-016 — Covered sixteen
+
+exact-rf-016
+
+### RF-017 — Covered seventeen
+
+exact-rf-017
+
+### RF-026 — Covered twenty-six
+
+exact-rf-026
+REQUIREMENTS
+printf 'export function DecidePolicy() { return true; }\n' > "$PROJECT/internal/policy/policy.ts"
 printf 'export const untouched = 1;\n' > "$PROJECT/src/unrelated.ts"
+printf 'control noise\n' > "$PROJECT/.rb/runs/noise/generation.log"
+printf 'harness noise\n' > "$PROJECT/.rb-harness/runs/noise/bundle.json"
+printf 'git noise\n' > "$PROJECT/.git/objects/noise"
+printf 'dependency noise\n' > "$PROJECT/node_modules/pkg/index.js"
+printf 'vendor noise\n' > "$PROJECT/vendor/pkg/index.go"
+printf 'binary\0noise' > "$PROJECT/build/product.bin"
+printf 'execution noise\n' > "$PROJECT/logs/provider.log"
 
 cat > "$WORK/state/tasks.json" <<'JSON'
 [
+  { "id": "T023", "title": "Produce policy", "scope": "`internal/policy/`", "done": true, "dependsOn": [] },
   { "id": "T001", "scope": "`src/explain/linux-user.ts`, `tests/explain/linux-user.test.ts`", "done": false },
-  { "id": "T002", "scope": "`src/explain/missing.ts`", "done": false }
+  { "id": "T002", "scope": "`src/explain/missing.ts`", "done": false },
+  {
+    "id": "T041",
+    "scope": "`src/tui/`",
+    "covers": "RF-014, RF-015, RF-016, RF-017, RF-026",
+    "dependsOn": ["T023"],
+    "done": false
+  },
+  { "id": "T099", "scope": "`.rb-harness/allowed.txt`", "done": false }
 ]
 JSON
 
@@ -52,12 +99,17 @@ JSON
 
 cat > "$WORK/state/before.json" <<'JSON'
 { "schema": "rb-ralph-evidence/v1", "files": {
-  "src/explain/linux-user.ts": "hash", "src/unrelated.ts": "hash", ".rb/init/PROJECT.md": "hash" } }
+  "src/explain/linux-user.ts": "hash", "src/unrelated.ts": "hash",
+  ".rb/init/PROJECT.md": "hash", ".rb/runs/noise/generation.log": "hash",
+  ".rb-harness/runs/noise/bundle.json": "hash", ".git/objects/noise": "hash",
+  "node_modules/pkg/index.js": "hash", "vendor/pkg/index.go": "hash",
+  "build/product.bin": "hash", "logs/provider.log": "hash" } }
 JSON
 
 cat > "$WORK/state/task.txt" <<'TXT'
 **Context:**
 - `.rb/init/PROJECT.md`
+- `.rb/init/REQUIREMENTS.md`
 
 - [ ] T001 — Implement it
 TXT
@@ -74,6 +126,28 @@ check "ships the project tree from the snapshot" "$context" "src/unrelated.ts"
 check "ships the phase context document" "$context" "context-document"
 tree_block="$(printf '%s' "$context" | sed -n '/PROJECT FILES/,/^---/p')"
 refute "keeps .rb out of the project tree listing" "$tree_block" ".rb/"
+refute "keeps .rb-harness out of the project tree listing" "$tree_block" ".rb-harness/"
+refute "keeps .git out of the project tree listing" "$tree_block" ".git/"
+refute "keeps dependency trees out of the project tree listing" "$tree_block" "node_modules/"
+refute "keeps vendor trees out of the project tree listing" "$tree_block" "vendor/"
+refute "keeps build binaries out of the project tree listing" "$tree_block" "build/product.bin"
+refute "keeps provider logs out of the project tree listing" "$tree_block" "logs/provider.log"
+
+t041="$(node "$HELPER" --root "$PROJECT" --tasks "$WORK/state/tasks.json" --task T041 \
+  --before "$WORK/state/before.json" --phase-file "$WORK/state/task.txt" --max-bytes 12000)"
+check "T041 receives RF-014 by exact traceability" "$t041" "exact-rf-014"
+check "T041 receives RF-015 by exact traceability" "$t041" "exact-rf-015"
+check "T041 receives RF-016 by exact traceability" "$t041" "exact-rf-016"
+check "T041 receives RF-017 by exact traceability" "$t041" "exact-rf-017"
+check "T041 receives RF-026 by exact traceability" "$t041" "exact-rf-026"
+check "dependency map names the producing task" "$t041" "T023 — Produce policy"
+check "dependency map lists existing scope files" "$t041" "internal/policy/policy.ts"
+check "dependency map extracts deterministic public names" "$t041" "DecidePolicy"
+refute "dependency map does not dump dependency implementations" "$t041" "return true"
+
+printf 'explicitly authorized control-plane path\n' > "$PROJECT/.rb-harness/allowed.txt"
+authorized="$(node "$HELPER" --root "$PROJECT" --tasks "$WORK/state/tasks.json" --task T099)"
+check "explicit task scope can authorize a normally filtered path" "$authorized" "explicitly authorized control-plane path"
 
 missing="$(node "$HELPER" --root "$PROJECT" --tasks "$WORK/state/tasks.json" --task T002)"
 check "tells the agent which scope paths it must create" "$missing" "do not exist yet"

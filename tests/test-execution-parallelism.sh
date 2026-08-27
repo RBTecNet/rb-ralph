@@ -254,6 +254,93 @@ assert_contains "$MOCK_STATE/fresh-task-calls" 'T002' "first sequential task has
 assert_contains "$MOCK_STATE/fresh-task-calls" 'T003' "second sequential task has its own provider identity"
 assert_contains "$MOCK_STATE/fresh-task-T002.prompt" 'Implement only the task below in this fresh execution context' \
   "fresh task prompt uses the bounded task extract as authority"
+assert_contains "$MOCK_STATE/fresh-task-T002.prompt" 'Use rg to locate a symbol or exact criterion before opening another file' \
+  "fresh task prompt requires evidence-bounded discovery"
+assert_contains "$MOCK_STATE/fresh-task-T002.prompt" 'Run the focused validation for this task first' \
+  "fresh task prompt orders focused validation before broad suites"
+
+# A structured finding for one task narrows the next executor attempt. The
+# passing sibling remains evidenced and its successful validation can be reused.
+cat > "$TEMP_ROOT/localized-agent" <<'LOCALIZED_AGENT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > /dev/null
+printf '%s\t%s\n' "$RB_RALPH_ATTEMPT" "$RB_RALPH_TASK_ID" >> "$MOCK_STATE/localized-calls.tsv"
+mkdir -p src
+printf 'attempt=%s\n' "$RB_RALPH_ATTEMPT" > "src/${RB_RALPH_TASK_ID}.txt"
+printf 'RB_RALPH_EXECUTOR_STATUS: COMPLETE\n'
+LOCALIZED_AGENT
+cat > "$TEMP_ROOT/localized-manager" <<'LOCALIZED_MANAGER'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > /dev/null
+printf '%s\n' 'RB_RALPH_AUDIT_STATUS: COMPLETE'
+if [ "$RB_RALPH_ATTEMPT" -eq 1 ]; then
+  printf '%s\n' \
+    'RB_RALPH_CRITERION: T002 | FAIL | focused task boundary still fails' \
+    'RB_RALPH_CRITERION: AC-T002-01 | FAIL | focused task outcome is unproven' \
+    'RB_RALPH_CRITERION: T003 | PASS | sibling task remains proven' \
+    'RB_RALPH_CRITERION: AC-T003-01 | PASS | sibling criterion remains proven' \
+    'RB_RALPH_FINDING: T002,AC-T002-01 | src/a | valid consumer A | focused defect | current focused evidence' \
+    'RB_RALPH_DECISION: RETRY' \
+    'RB_RALPH_REASON: only T002 needs repair'
+else
+  printf '%s\n' \
+    'RB_RALPH_CRITERION: T002 | PASS | focused repair is proven' \
+    'RB_RALPH_CRITERION: AC-T002-01 | PASS | focused task outcome passes' \
+    'RB_RALPH_CRITERION: T003 | PASS | sibling task remains proven' \
+    'RB_RALPH_CRITERION: AC-T003-01 | PASS | sibling criterion remains proven' \
+    'RB_RALPH_DECISION: COMPLETE' \
+    'RB_RALPH_REASON: localized repair accepted'
+fi
+LOCALIZED_MANAGER
+chmod +x "$TEMP_ROOT/localized-agent" "$TEMP_ROOT/localized-manager"
+LOCALIZED_PROJECT="$(new_project localized-retry)"
+RB_RALPH_EXECUTION_UNIT=task RB_RALPH_MANAGER_AUDIT_MODE=exhaustive \
+  "$RALPH" --project "$LOCALIZED_PROJECT" --validation-mode manager \
+  --agent-cmd "$TEMP_ROOT/localized-agent" --manager-cmd "$TEMP_ROOT/localized-manager" \
+  > "$TEMP_ROOT/localized.out"
+assert_eq "3" "$(wc -l < "$MOCK_STATE/localized-calls.tsv" | tr -d ' ')" \
+  "finding restricted to T002 does not repeat the proven T003 executor"
+assert_eq "1" "$(awk -F '\t' '$1 == 2 && $2 == "T002" { count += 1 } END { print count + 0 }' "$MOCK_STATE/localized-calls.tsv")" \
+  "localized retry executes the cited task on the next attempt"
+assert_eq "0" "$(awk -F '\t' '$1 == 2 && $2 == "T003" { count += 1 } END { print count + 0 }' "$MOCK_STATE/localized-calls.tsv")" \
+  "localized retry keeps an unaffected task out of the pending closure"
+LOCALIZED_EVENTS="$(find "$LOCALIZED_PROJECT/.rb/runs" -name events.tsv -type f -print -quit)"
+assert_contains "$LOCALIZED_EVENTS" $'RETRY_SCOPE_LOCALIZED\tnext executor task closure=T002' \
+  "localized retry decision is recorded explicitly"
+
+cat > "$TEMP_ROOT/hard-limit-agent" <<'HARD_LIMIT_AGENT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > /dev/null
+mkdir -p src
+printf 'partial but preserved\n' > src/hard-limit.txt
+printf '%s\n' '{"type":"item.completed","item":{"type":"command_execution","command":"rg boundary","exit_code":0}}'
+sleep 3
+HARD_LIMIT_AGENT
+cat > "$TEMP_ROOT/hard-limit-manager" <<'HARD_LIMIT_MANAGER'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > /dev/null
+touch "$MOCK_STATE/hard-limit-manager-called"
+printf '%s\n' 'RB_RALPH_DECISION: COMPLETE' 'RB_RALPH_REASON: should not run'
+HARD_LIMIT_MANAGER
+chmod +x "$TEMP_ROOT/hard-limit-agent" "$TEMP_ROOT/hard-limit-manager"
+HARD_LIMIT_PROJECT="$(new_project hard-context-limit)"
+hard_limit_rc=0
+RB_RALPH_CONTEXT_HARD_COMMAND_LIMIT=1 RB_RALPH_CONTEXT_SOFT_COMMAND_LIMIT=0 \
+  "$RALPH" --project "$HARD_LIMIT_PROJECT" --validation-mode manager \
+  --agent-cmd "$TEMP_ROOT/hard-limit-agent" --manager-cmd "$TEMP_ROOT/hard-limit-manager" \
+  > "$TEMP_ROOT/hard-limit.out" 2>&1 || hard_limit_rc=$?
+assert_eq "2" "$hard_limit_rc" "explicit hard context limit pauses the run recoverably"
+[ -f "$HARD_LIMIT_PROJECT/src/hard-limit.txt" ] || fail "hard context limit did not preserve partial workspace changes"
+ok "hard context limit preserves partial workspace changes"
+[ ! -f "$MOCK_STATE/hard-limit-manager-called" ] || fail "hard context limit reached the manager and could be marked complete"
+ok "hard context limit cannot be converted into artificial COMPLETE"
+HARD_LIMIT_EVENTS="$(find "$HARD_LIMIT_PROJECT/.rb/runs" -name events.tsv -type f -print -quit)"
+assert_contains "$HARD_LIMIT_EVENTS" $'PAUSED_CONTEXT_LIMIT\t' \
+  "hard context pause reason is persisted as resumable evidence"
 
 # An interrupted attempt can leave canonical prompt/log names without an event.
 # Resume must preserve those artifacts and advance the durable attempt number.
