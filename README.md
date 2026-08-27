@@ -145,7 +145,7 @@ Confirm the exact source or installed build at any time with:
 ```bash
 rb-ralph --ver
 rb-ralph --version
-# RB Ralph 0.10.0
+# RB Ralph 0.10.1
 ```
 
 The installer prints and copies the same `VERSION` marker, so a source upgrade
