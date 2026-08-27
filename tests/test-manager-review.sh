@@ -9,6 +9,7 @@
 # optimistic COMPLETE, and that conversion lives in the orchestrator rather than
 # in the prompt, so no review scope can approve past it.
 set -euo pipefail
+export RB_RALPH_CUSTOM_MANAGER_CAPABILITY=observational-v1
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RALPH="$ROOT/bin/rb-ralph"
@@ -52,7 +53,11 @@ cat > "$TEMP_ROOT/agent" <<'AGENT'
 #!/usr/bin/env bash
 set -euo pipefail
 cat > /dev/null
-mkdir -p src && printf 'done\n' > "src/${RB_RALPH_TASK_ID:-phase}.txt"
+case "${RB_RALPH_TASK_ID:-phase}" in
+  T002) mkdir -p src/a && printf 'done\n' > src/a/result.txt ;;
+  T003) mkdir -p src/b && printf 'done\n' > src/b/result.txt ;;
+  *) mkdir -p src && printf 'done\n' > src/phase.txt ;;
+esac
 printf 'RB_RALPH_EXECUTOR_STATUS: COMPLETE\n'
 AGENT
 cat > "$TEMP_ROOT/manager" <<'MANAGER'

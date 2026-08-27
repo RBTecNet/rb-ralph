@@ -49,6 +49,15 @@ case "$RB_PERMISSION_MODE" in
     ;;
 esac
 
+if [ "$RB_PERMISSION_MODE" = "protected" ] && [ -n "$ROLE_PERMISSION" ]; then
+  printf 'ERROR: custom OpenCode protected permissions are unsupported; Ralph owns the capability policy\n' >&2
+  exit 1
+fi
+if [ "$ROLE" = "manager" ] && [ -n "$ROLE_PERMISSION" ]; then
+  printf 'ERROR: custom OpenCode manager permissions are unsupported; G3 requires Ralph-owned read-only permissions\n' >&2
+  exit 1
+fi
+
 ARGS=(run --dir "$PROJECT_ROOT")
 if [ -n "$MODEL" ]; then
   ARGS+=(--model "$MODEL")
@@ -65,7 +74,12 @@ elif [ -n "$ROLE_PERMISSION" ]; then
 elif [ "$ROLE" = "manager" ]; then
   # Keep the technical manager observational when protection is requested.
   export OPENCODE_PERMISSION='{"edit":"deny","bash":"deny","task":"deny","external_directory":"deny"}'
+else
+  # The executor may edit its project, but protected mode cannot inherit an
+  # ambient permissive policy with external-directory access.
+  export OPENCODE_PERMISSION='{"edit":"allow","bash":"allow","task":"allow","external_directory":"deny"}'
 fi
 
 cd "$PROJECT_ROOT"
-rb_run_provider opencode "$OPENCODE_BIN" "${ARGS[@]}"
+if rb_run_provider opencode "$OPENCODE_BIN" "${ARGS[@]}"; then provider_result=0; else provider_result=$?; fi
+exit "$provider_result"

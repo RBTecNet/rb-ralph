@@ -12,6 +12,11 @@ contrato opcional `rb-operational/v1` para aceitação operacional em ambiente
 limpo. A documentação do Harness não depende do Ralph e pode ser entregue a
 outro executor compatível.
 
+`RB-RALPH-CONTRACT-IDENTITY.json` acompanha o pacote e vincula a versão do
+runtime ao status do contrato consolidado. O snapshot consolidado `0.8.11` é
+histórico; `rb-manifest/v1`, `rb-execution/v1` e `rb-operational/v1` continuam
+contratos de dados independentes e autoritativos.
+
 > **Padrão de segurança:** sem uma flag explícita, os providers rodam em modo
 > YOLO com as permissões do usuário atual do sistema operacional. Use
 > `--protected` ou execute projetos não confiáveis em VM, container ou conta
@@ -207,7 +212,8 @@ rb-ralph provider test
 
 ## Política de permissão
 
-YOLO é o padrão:
+YOLO é o padrão do executor. O gerente G3 sempre recebe autoridade protegida e
+somente de leitura:
 
 ```bash
 rb-ralph --project . --plan <artifact-id> --provider codex
@@ -220,9 +226,12 @@ Modo protegido:
 rb-ralph --project . --plan <artifact-id> --provider codex --protected
 ```
 
-Em modo protegido, o executor Codex recebe workspace-write e o gerente recebe
-read-only. Claude usa `acceptEdits` e `plan`. Um adapter personalizado que não
-consiga respeitar `protected` deve falhar, nunca executar irrestrito em silêncio.
+Em modo protegido, o executor Codex recebe workspace-write; o gerente continua
+em read-only. Claude usa `acceptEdits` no executor e `plan` no gerente. OpenCode
+usa permissões de negação no gerente. Overrides que dariam escrita ao gerente
+falham explicitamente. Um adapter personalizado que não consiga respeitar
+`protected` deve falhar; o Ralph também sela o estado completo do produto antes
+e depois de G3 e rejeita qualquer mutação.
 
 ## Unidade de execução e contexto novo
 
@@ -262,10 +271,10 @@ de achados, agrupado por causa raiz. Isso evita corrigir uma falha por retry e
 descobrir outra que já existia na mesma entrega.
 
 No retry seguinte, `FAIL` e `UNPROVEN` estruturados selecionam somente a menor
-closure de tasks capaz de reparar o achado. Uma dependência só volta ao conjunto
-quando o finding aponta para o `Scope` dela como fronteira que precisa mudar.
-Achados sem mapeamento determinístico usam fallback conservador registrado, sem
-adivinhar uma task.
+closure de tasks determinada pelas linhas validadas da matriz. Campos livres do
+finding, como `boundary` e `expected`, são diagnósticos e não adicionam tasks ou
+paths à autoridade de retry. Achados sem mapeamento determinístico usam fallback
+conservador registrado, sem adivinhar uma task.
 
 ## Validação incremental
 
@@ -281,6 +290,11 @@ comandos únicos declarados em `PHASES.md`. Depois de um retry:
 Isso evita executar centenas de testes quando uma alteração comprovadamente
 afeta apenas uma fatia pequena, mas mantém fallback conservador quando a
 documentação não permite provar isolamento.
+
+Na unidade padrão `task`, a mesma sintaxe de `Scope` também é a fronteira
+mecânica de escrita. O Ralph compara o estado completo por task, dá precedência
+à proteção dos artefatos de autoridade e interrompe antes de G2/G3 se houver um
+path fora do escopo autorizado.
 
 Configure timeout dos comandos:
 
@@ -548,6 +562,14 @@ Em cópia limpa do projeto, o Ralph pode testar:
 - plugins em host descartável;
 - aplicações desktop/mobile por mecanismo observável real.
 
+A cópia limpa exclui estado Git/runs, `.env`, dependências instaladas, produtos
+de build e caches comuns. Um cenário que precisar deles deve recriá-los pelos
+comandos declarados; Ralph não os herda silenciosamente da máquina local.
+
+Sem contrato explícito, o RBF fica `BLOCKED`: o modelo não pode inventar uma
+fronteira de aceitação operacional. Adicione um cenário `rb-operational/v1`
+que exercite a entrada de consumidor documentada.
+
 Desabilite apenas deliberadamente:
 
 ```bash
@@ -619,6 +641,7 @@ bash tests/test-execution-parallelism.sh
 bash tests/test-agent-context.sh
 bash tests/test-context-efficiency.sh
 bash tests/test-validation-cache.sh
+bash tests/test-authority-enforcement.sh
 ```
 
 As suítes cobrem Bash 3.2, instalação e symlinks, paths com espaços, adapters,

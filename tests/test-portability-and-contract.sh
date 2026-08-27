@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export RB_RALPH_CUSTOM_MANAGER_CAPABILITY=observational-v1
 
 PACKAGE_ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RALPH="$PACKAGE_ROOT/bin/rb-ralph"
@@ -107,8 +108,15 @@ if [ "$RB_RALPH_ROLE" = "agent" ]; then
   mkdir -p src
   printf 'implemented by %s\n' "$provider" > "src/${MOCK_RUN_TAG}.txt"
   printf 'executor-output-%s\n' "$provider"
+  printf '%s\n' 'RB_RALPH_EXECUTOR_RESULT: {"contract":"rb-ralph-executor-completion/v1","status":"completed"}'
 else
-  printf '%s\n' 'RB_RALPH_DECISION: COMPLETE' 'RB_RALPH_REASON: reviewed evidence'
+  if [ "$provider" = "codex" ] && [[ " $* " == *" --json "* ]]; then
+    printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"RB_RALPH_DECISION: COMPLETE\nRB_RALPH_REASON: reviewed evidence"}}'
+  elif [ "$provider" = "claude" ] && [[ " $* " == *" --output-format json "* ]]; then
+    printf '%s\n' '{"result":"RB_RALPH_DECISION: COMPLETE\nRB_RALPH_REASON: reviewed evidence"}'
+  else
+    printf '%s\n' 'RB_RALPH_DECISION: COMPLETE' 'RB_RALPH_REASON: reviewed evidence'
+  fi
 fi
 MOCK
 chmod +x "$MOCK_DRIVER"
@@ -202,12 +210,17 @@ INSTALL_PREFIX="$TEMP_ROOT/installed prefix"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/splash.cjs" ] || fail "installed splash helper is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/process-supervisor.cjs" ] || fail "installed process supervisor is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/evidence-index.cjs" ] || fail "installed evidence index is missing"
+[ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/executor-completion.cjs" ] || fail "installed executor completion helper is missing"
+[ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/evidence-sanitizer.cjs" ] || fail "installed evidence sanitizer is missing"
+[ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/evidence-provenance.cjs" ] || fail "installed evidence provenance helper is missing"
+[ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/release-identity.cjs" ] || fail "installed release identity helper is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/validation-cache.cjs" ] || fail "installed validation cache is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/manager-audit.cjs" ] || fail "installed manager audit validator is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/operational-verifier.cjs" ] || fail "installed operational verifier is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/fragment-discovery.cjs" ] || fail "installed fragment discovery helper is missing"
 [ -x "$INSTALL_PREFIX/libexec/rb-ralph/lib/profiles.cjs" ] || fail "installed profile helper is missing"
 [ -f "$INSTALL_PREFIX/libexec/rb-ralph/VERSION" ] || fail "installed version marker is missing"
+[ -f "$INSTALL_PREFIX/libexec/rb-ralph/RB-RALPH-CONTRACT-IDENTITY.json" ] || fail "installed contract identity metadata is missing"
 [ -x "$INSTALL_PREFIX/bin/rb-ralph-watch" ] || fail "installed dashboard launcher is missing"
 ok "temporary-prefix installation keeps launcher and auxiliary resources together"
 "$RALPH" --ver > "$TEMP_ROOT/source-version.out"
@@ -845,7 +858,11 @@ attempt="${RB_RALPH_ATTEMPT:?}"
 if [ "$attempt" -lt 4 ]; then
   printf '%s\n' 'RB_RALPH_DECISION: RETRY' "RB_RALPH_REASON: remaining defect discovered in pass $attempt"
 else
-  printf '%s\n' 'RB_RALPH_DECISION: COMPLETE' 'RB_RALPH_REASON: fourth progressive implementation satisfies the phase'
+  printf '%s\n' \
+    'RB_RALPH_FINDING_RESOLUTION: F-P01-A001 | attempt 4 canonical implementation evidence' \
+    'RB_RALPH_FINDING_RESOLUTION: F-P01-A002 | attempt 4 canonical implementation evidence' \
+    'RB_RALPH_FINDING_RESOLUTION: F-P01-A003 | attempt 4 canonical implementation evidence' \
+    'RB_RALPH_DECISION: COMPLETE' 'RB_RALPH_REASON: fourth progressive implementation satisfies the phase'
 fi
 PROGRESSIVE_MANAGER
 chmod +x "$TEMP_ROOT/progressive-agent" "$TEMP_ROOT/progressive-manager"
@@ -874,6 +891,7 @@ count=0
 [ ! -f "$count_file" ] || count="$(cat "$count_file")"
 printf '%s\n' "$((count + 1))" > "$count_file"
 printf 'executor made no changes\n'
+printf '%s\n' 'RB_RALPH_EXECUTOR_RESULT: {"contract":"rb-ralph-executor-completion/v1","status":"completed"}'
 STALLED_AGENT
 cat > "$TEMP_ROOT/stalled-manager" <<'STALLED_MANAGER'
 #!/usr/bin/env bash
@@ -1039,7 +1057,9 @@ if [ "$RB_RALPH_AGENT_EXIT_CODE" = 124 ]; then
   printf '%s\n' 'RB_RALPH_DECISION: BLOCKED' \
     'RB_RALPH_REASON: preserve partial files and avoid the silent cleanup command on the next attempt'
 else
-  printf '%s\n' 'RB_RALPH_DECISION: COMPLETE' 'RB_RALPH_REASON: executor recovered and evidence is complete'
+  printf '%s\n' \
+    'RB_RALPH_FINDING_RESOLUTION: F-P01-A001 | recovered executor evidence and current canonical validation state' \
+    'RB_RALPH_DECISION: COMPLETE' 'RB_RALPH_REASON: executor recovered and evidence is complete'
 fi
 IDLE_MANAGER
 chmod +x "$TEMP_ROOT/idle-agent" "$TEMP_ROOT/idle-aware-manager"
@@ -1130,7 +1150,10 @@ cat > "$TEMP_ROOT/capped-manager" <<'CAPPED_MANAGER'
 set -euo pipefail
 cat > /dev/null
 if [ "${CAPPED_MANAGER_COMPLETE:-0}" = 1 ]; then
-  printf '%s\n' 'RB_RALPH_DECISION: COMPLETE' 'RB_RALPH_REASON: resumed evidence accepted'
+  printf '%s\n' \
+    'RB_RALPH_FINDING_RESOLUTION: F-P01-A001 | resumed canonical implementation evidence' \
+    'RB_RALPH_FINDING_RESOLUTION: F-P01-A002 | resumed canonical implementation evidence' \
+    'RB_RALPH_DECISION: COMPLETE' 'RB_RALPH_REASON: resumed evidence accepted'
 else
   printf '%s\n' 'RB_RALPH_DECISION: RETRY' "RB_RALPH_REASON: capped feedback from attempt ${RB_RALPH_ATTEMPT:?}"
 fi
@@ -1315,6 +1338,12 @@ assert_contains "$TEMP_ROOT/claude.usage.json" '"effort": "high"' \
 # rb-operational/v1 in a secret-free disposable copy even in manager validation mode.
 FINAL_AUDIT_PROJECT="$(new_project final-operational-audit)"
 printf '%s\n' 'must-not-enter-clean-room' > "$FINAL_AUDIT_PROJECT/.env"
+mkdir -p "$FINAL_AUDIT_PROJECT/scripts" "$FINAL_AUDIT_PROJECT/src"
+printf '%s\n' 'final audit source' > "$FINAL_AUDIT_PROJECT/src/final-audit.txt"
+printf '%s\n' 'const f=require("fs"); if(f.existsSync(".env")||!f.existsSync("src/final-audit.txt")) process.exit(7); console.log("clean-command-ok");' \
+  > "$FINAL_AUDIT_PROJECT/scripts/clean-copy.js"
+printf '%s\n' 'require("http").createServer((q,r)=>r.end("operational-ok")).listen(Number(process.env.RB_VERIFY_PORT), "127.0.0.1", ()=>console.log("ready"));' \
+  > "$FINAL_AUDIT_PROJECT/scripts/server.js"
 cat > "$FINAL_AUDIT_PROJECT/.rb/features/test/OPERATIONS.json" <<'OPERATIONS'
 {
   "contract": "rb-operational/v1",
@@ -1329,7 +1358,7 @@ cat > "$FINAL_AUDIT_PROJECT/.rb/features/test/OPERATIONS.json" <<'OPERATIONS'
           "id": "clean-copy",
           "kind": "command",
           "command": {
-            "argv": ["node", "-e", "const f=require('fs'); if(f.existsSync('.env')||!f.existsSync('src/final-audit.txt')) process.exit(7); console.log('clean-command-ok')"]
+            "argv": ["node", "scripts/clean-copy.js"]
           },
           "expect": { "exitCode": 0, "stdoutIncludes": ["clean-command-ok"] }
         },
@@ -1337,7 +1366,7 @@ cat > "$FINAL_AUDIT_PROJECT/.rb/features/test/OPERATIONS.json" <<'OPERATIONS'
           "id": "real-process-boundary",
           "kind": "process",
           "command": {
-            "argv": ["node", "-e", "require('http').createServer((q,r)=>r.end('operational-ok')).listen(Number(process.env.RB_VERIFY_PORT), '127.0.0.1', ()=>console.log('ready'))"]
+            "argv": ["node", "scripts/server.js"]
           },
           "ready": { "kind": "stdout", "includes": "ready" },
           "checks": [
@@ -1408,6 +1437,7 @@ cat > "$TEMP_ROOT/same-evidence-agent" <<'SAME_EVIDENCE_AGENT'
 set -euo pipefail
 cat > /dev/null
 printf 'no workspace change\n'
+printf '%s\n' 'RB_RALPH_EXECUTOR_RESULT: {"contract":"rb-ralph-executor-completion/v1","status":"completed"}'
 SAME_EVIDENCE_AGENT
 cat > "$TEMP_ROOT/flipping-manager" <<'FLIPPING_MANAGER'
 #!/usr/bin/env bash
@@ -1426,7 +1456,7 @@ expect_failure "$TEMP_ROOT/same-evidence.out" \
   --max-attempts 3 --max-total-attempts 2 \
   --agent-cmd "$TEMP_ROOT/same-evidence-agent" --manager-cmd "$TEMP_ROOT/flipping-manager"
 assert_contains "$TEMP_ROOT/same-evidence.out" \
-  'manager attempted to close an open finding with the same canonical code/validation evidence' \
+  'manager omitted an open finding without a specific new-evidence RB_RALPH_FINDING_RESOLUTION' \
   "unchanged evidence cannot flip a prior RETRY to COMPLETE"
 SAME_EVIDENCE_RUN="$(basename "$(find "$SAME_EVIDENCE_PROJECT/.rb/runs" -mindepth 1 -maxdepth 1 -type d -print -quit)")"
 assert_not_contains "$SAME_EVIDENCE_PROJECT/.rb/runs/$SAME_EVIDENCE_RUN/events.tsv" $'\tCOMPLETE\t' \
@@ -1517,8 +1547,10 @@ TAMPER_RUN="$(basename "$(find "$TAMPER_PROJECT/.rb/runs" -mindepth 1 -maxdepth 
 TAMPER_LOG="$TAMPER_PROJECT/.rb/runs/$TAMPER_RUN/logs/P01-attempt-1-agent.log"
 assert_contains "$TAMPER_LOG" 'RB_RALPH_CONTROL_PLANE_VIOLATION' \
   "executor control-plane tampering is detected"
-assert_contains "$TEMP_ROOT/control-plane-tampering.out" 'implementation agent or isolated integration exited with 1' \
-  "manager optimism cannot override control-plane tampering"
+assert_contains "$TEMP_ROOT/control-plane-tampering.out" 'violated orchestrator control-plane ownership' \
+  "control-plane tampering terminates before manager optimism can be consulted"
+assert_not_contains "$TAMPER_PROJECT/.rb/runs/$TAMPER_RUN/events.tsv" $'\tCOMPLETE\t' \
+  "control-plane tampering cannot leave a canonical COMPLETE event"
 
 # A live owner keeps exclusive access, while an orphaned lock left by a power
 # loss is recovered automatically without deleting durable run evidence.

@@ -74,7 +74,12 @@ cat > "$WORK/retry-audit.json" <<'AUDIT'
 AUDIT
 node "$ROOT/lib/manager-audit.cjs" retry-selection "$WORK/tasks.json" "$WORK/retry-audit.json" > "$WORK/retry-selection.json"
 check "dependent finding selects the cited task" "$WORK/retry-selection.json" '"T002"'
-check "dependency joins only when its declared boundary must change" "$WORK/retry-selection.json" '"T001"'
+if grep -qF -- '"T001"' "$WORK/retry-selection.json"; then
+  printf 'FAIL manager boundary prose expanded retry authority to T001\n'
+  failures=$((failures + 1))
+else
+  printf 'PASS manager boundary prose cannot expand retry authority to T001\n'
+fi
 
 cat > "$WORK/unmapped-audit.json" <<'AUDIT'
 {"expected":[],"rows":[{"id":"RF-999","status":"FAIL"}],"findings":[{"criteria":"RF-999","boundary":"unknown boundary"}]}
@@ -84,6 +89,22 @@ node "$ROOT/lib/manager-audit.cjs" retry-selection "$WORK/tasks.json" "$WORK/unm
 if [ "$unmapped_rc" -eq 3 ]; then printf 'PASS unmapped finding requests an explicit conservative fallback\n'
 else printf 'FAIL unmapped finding exit=%s, expected 3\n' "$unmapped_rc"; failures=$((failures + 1)); fi
 check "unmapped finding is never guessed as a task" "$WORK/unmapped-selection.json" '"fallback": true'
+
+cat > "$WORK/unknown-finding-manager.log" <<'MANAGER'
+RB_RALPH_AUDIT_STATUS: COMPLETE
+RB_RALPH_CRITERION: T001 | FAIL | current task evidence fails
+RB_RALPH_CRITERION: AC-T001-01 | FAIL | current criterion evidence fails
+RB_RALPH_FINDING: T001,AC-T001-01,T999 | src/ | declared behavior | observed failure | canonical evidence
+RB_RALPH_DECISION: RETRY
+RB_RALPH_REASON: retry
+MANAGER
+unknown_finding_rc=0
+node "$ROOT/lib/manager-audit.cjs" validate \
+  "$ROOT/tests/fixtures/execution/valid/minimal/PHASES.md" \
+  "$WORK/unknown-finding-manager.log" > "$WORK/unknown-finding-audit.json" || unknown_finding_rc=$?
+if [ "$unknown_finding_rc" -eq 3 ]; then printf 'PASS unknown finding IDs are rejected as implementation authority\n'
+else printf 'FAIL unknown finding ID exit=%s, expected 3\n' "$unknown_finding_rc"; failures=$((failures + 1)); fi
+check "unknown finding ID is reported explicitly" "$WORK/unknown-finding-audit.json" 'unknown finding criteria: T999'
 
 printf '\n' > "$WORK/input.txt"
 cat > "$WORK/provider" <<'PROVIDER'

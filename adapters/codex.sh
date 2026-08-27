@@ -60,6 +60,15 @@ case "$SANDBOX" in
     ;;
 esac
 
+if [ "$ROLE" = "manager" ] && [ "$SANDBOX" != "read-only" ]; then
+  printf 'ERROR: Codex manager sandbox must be read-only; G3 cannot run with write capability\n' >&2
+  exit 1
+fi
+if [ "$ROLE" = "agent" ] && [ "$RB_PERMISSION_MODE" = "protected" ] && [ "$SANDBOX" != "workspace-write" ]; then
+  printf 'ERROR: Codex protected executor sandbox must be workspace-write; unsafe overrides are not a protected capability\n' >&2
+  exit 1
+fi
+
 ARGS=(
   exec
   --cd "$PROJECT_ROOT"
@@ -89,8 +98,9 @@ if [ -n "${RB_RALPH_TELEMETRY_FILE:-}" ]; then
     printf 'ERROR: RB Ralph telemetry helper not found: %s\n' "$TELEMETRY_HELPER" >&2
     exit 1
   }
-  rb_run_provider_telemetry "$TELEMETRY_HELPER" codex "$MODEL" "$EFFORT" \
-    "$RB_RALPH_TELEMETRY_FILE" "$CODEX_BIN" "${ARGS[@]}"
+  if rb_run_provider_telemetry "$TELEMETRY_HELPER" codex "$MODEL" "$EFFORT" \
+    "$RB_RALPH_TELEMETRY_FILE" "$CODEX_BIN" "${ARGS[@]}"; then provider_result=0; else provider_result=$?; fi
 else
-  rb_run_provider codex "$CODEX_BIN" "${ARGS[@]}"
+  if rb_run_provider codex "$CODEX_BIN" "${ARGS[@]}"; then provider_result=0; else provider_result=$?; fi
 fi
+exit "$provider_result"

@@ -57,6 +57,15 @@ case "$PERMISSION_MODE" in
     ;;
 esac
 
+if [ "$ROLE" = "manager" ] && [ "$PERMISSION_MODE" != "plan" ]; then
+  printf 'ERROR: Claude manager permission mode must be plan; G3 cannot run with write capability\n' >&2
+  exit 1
+fi
+if [ "$ROLE" = "agent" ] && [ "$RB_PERMISSION_MODE" = "protected" ] && [ "$PERMISSION_MODE" != "acceptEdits" ]; then
+  printf 'ERROR: Claude protected executor permission mode must be acceptEdits; unsafe overrides are not a protected capability\n' >&2
+  exit 1
+fi
+
 ARGS=(
   -p
   --output-format "$(if [ -n "${RB_RALPH_TELEMETRY_FILE:-}" ]; then printf json; else printf text; fi)"
@@ -91,8 +100,9 @@ if [ -n "${RB_RALPH_TELEMETRY_FILE:-}" ]; then
     printf 'ERROR: RB Ralph telemetry helper not found: %s\n' "$TELEMETRY_HELPER" >&2
     exit 1
   }
-  rb_run_provider_telemetry "$TELEMETRY_HELPER" claude "$MODEL" "$EFFORT" \
-    "$RB_RALPH_TELEMETRY_FILE" "$CLAUDE_BIN" "${ARGS[@]}"
+  if rb_run_provider_telemetry "$TELEMETRY_HELPER" claude "$MODEL" "$EFFORT" \
+    "$RB_RALPH_TELEMETRY_FILE" "$CLAUDE_BIN" "${ARGS[@]}"; then provider_result=0; else provider_result=$?; fi
 else
-  rb_run_provider claude "$CLAUDE_BIN" "${ARGS[@]}"
+  if rb_run_provider claude "$CLAUDE_BIN" "${ARGS[@]}"; then provider_result=0; else provider_result=$?; fi
 fi
+exit "$provider_result"

@@ -49,16 +49,17 @@ ARGS=(
 if [ -n "$SELECTED_CORE" ]; then
   if [[ "$SELECTED_CORE" == *.js || "$SELECTED_CORE" == *.cjs || "$SELECTED_CORE" == *.mjs ]]; then
     [ -f "$SELECTED_CORE" ] || { printf 'ERROR: selected RB Harness direct API runtime does not exist: %s\n' "$SELECTED_CORE" >&2; exit 1; }
-    rb_run_provider "$PROVIDER" node "$SELECTED_CORE" "${ARGS[@]}"
+    if rb_run_provider "$PROVIDER" node "$SELECTED_CORE" "${ARGS[@]}"; then provider_result=0; else provider_result=$?; fi
   else
     [ -x "$SELECTED_CORE" ] || { printf 'ERROR: selected RB Harness direct API runtime is not executable: %s\n' "$SELECTED_CORE" >&2; exit 1; }
-    rb_run_provider "$PROVIDER" "$SELECTED_CORE" "${ARGS[@]}"
+    if rb_run_provider "$PROVIDER" "$SELECTED_CORE" "${ARGS[@]}"; then provider_result=0; else provider_result=$?; fi
   fi
 elif [ -f "$CORE_CJS" ]; then
-  rb_run_provider "$PROVIDER" node "$CORE_CJS" "${ARGS[@]}"
+  if rb_run_provider "$PROVIDER" node "$CORE_CJS" "${ARGS[@]}"; then provider_result=0; else provider_result=$?; fi
 elif [ -x "$CORE_EXECUTABLE" ]; then
-  rb_run_provider "$PROVIDER" "$CORE_EXECUTABLE" "${ARGS[@]}"
+  if rb_run_provider "$PROVIDER" "$CORE_EXECUTABLE" "${ARGS[@]}"; then provider_result=0; else provider_result=$?; fi
 else
   printf 'ERROR: RB Harness direct API runtime is unavailable; reinstall the complete RB Ralph package\n' >&2
   exit 1
 fi
+exit "${provider_result:-1}"

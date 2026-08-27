@@ -30,7 +30,7 @@ cat > "$TEMP_ROOT/changes-a.json" <<'JSON'
 JSON
 
 node "$HELPER" select "$TEMP_ROOT/tasks.json" "$TEMP_ROOT/validations.json" \
-  "$TEMP_ROOT/changes-a.json" "$TEMP_ROOT/cache.json" > "$TEMP_ROOT/first.tsv"
+  "$TEMP_ROOT/changes-a.json" "$TEMP_ROOT/cache.json" state-a > "$TEMP_ROOT/first.tsv"
 assert_contains "$TEMP_ROOT/first.tsv" $'meta\timpact\taffected' "bounded scopes select affected mode"
 [ "$(grep -c $'\tcommand\ttest-b\t' "$TEMP_ROOT/first.tsv")" -eq 1 ] \
   || fail "identical commands are deduplicated across tasks"
@@ -38,10 +38,10 @@ ok "identical commands are deduplicated across tasks"
 
 key_a="$(awk -F '\t' '$3 == "test-a" { print $5 }' "$TEMP_ROOT/first.tsv")"
 key_b="$(awk -F '\t' '$3 == "test-b" { print $5 }' "$TEMP_ROOT/first.tsv")"
-node "$HELPER" record "$TEMP_ROOT/cache.json" "$key_a" T001 command test-a 0 first.log
-node "$HELPER" record "$TEMP_ROOT/cache.json" "$key_b" T002,T003 command test-b 0 first.log
+node "$HELPER" record "$TEMP_ROOT/cache.json" "$key_a" T001 command test-a 0 first.log state-a
+node "$HELPER" record "$TEMP_ROOT/cache.json" "$key_b" T002,T003 command test-b 0 first.log state-a
 node "$HELPER" select "$TEMP_ROOT/tasks.json" "$TEMP_ROOT/validations.json" \
-  "$TEMP_ROOT/changes-a.json" "$TEMP_ROOT/cache.json" > "$TEMP_ROOT/retry.tsv"
+  "$TEMP_ROOT/changes-a.json" "$TEMP_ROOT/cache.json" state-a > "$TEMP_ROOT/retry.tsv"
 assert_contains "$TEMP_ROOT/retry.tsv" $'T001\tcommand\ttest-a\trun' "affected task validation is rerun"
 assert_contains "$TEMP_ROOT/retry.tsv" $'T002,T003\tcommand\ttest-b\treuse' "unaffected successful validation is reused"
 
@@ -49,10 +49,14 @@ cat > "$TEMP_ROOT/changes-unknown.json" <<'JSON'
 {"added":["outside/declared-scope.txt"],"modified":[],"deleted":[],"limitations":[]}
 JSON
 node "$HELPER" select "$TEMP_ROOT/tasks.json" "$TEMP_ROOT/validations.json" \
-  "$TEMP_ROOT/changes-unknown.json" "$TEMP_ROOT/cache.json" > "$TEMP_ROOT/fallback.tsv"
+  "$TEMP_ROOT/changes-unknown.json" "$TEMP_ROOT/cache.json" state-b > "$TEMP_ROOT/fallback.tsv"
 assert_contains "$TEMP_ROOT/fallback.tsv" $'meta\timpact\tfull' "unknown impact falls back to full validation"
 [ "$(grep -c $'\trun\t' "$TEMP_ROOT/fallback.tsv")" -eq 2 ] \
   || fail "full fallback invalidates every unique command"
 ok "full fallback invalidates every unique command"
+
+node "$HELPER" select "$TEMP_ROOT/tasks.json" "$TEMP_ROOT/validations.json" \
+  "$TEMP_ROOT/changes-a.json" "$TEMP_ROOT/cache.json" state-b > "$TEMP_ROOT/stale-state.tsv"
+assert_contains "$TEMP_ROOT/stale-state.tsv" $'T002,T003\tcommand\ttest-b\trun' "a changed product seal rejects stale green cache evidence"
 
 printf '1..%s\n' "$PASS"

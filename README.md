@@ -70,8 +70,9 @@ No auxiliary resource is written directly to `/bin`. The layout is:
     ├── bin/{rb-ralph,rb-ralph-watch}
     ├── adapters/{adapter-utils,api,codex,claude,opencode}.sh
     ├── core/rb-harness.cjs
-    ├── lib/{agent-context,agent-activity,context-efficiency,evidence,evidence-index,validation-cache,manager-audit,control-plane,process-supervisor,operational-verifier,fragment-discovery,profiles,provider-telemetry,usage-summary,dashboard}.cjs
+    ├── lib/{agent-context,agent-activity,context-efficiency,evidence,evidence-index,evidence-provenance,evidence-sanitizer,executor-completion,validation-cache,manager-audit,control-plane,process-supervisor,operational-verifier,release-identity,fragment-discovery,profiles,provider-telemetry,usage-summary,dashboard}.cjs
     ├── VERSION
+    ├── RB-RALPH-CONTRACT-IDENTITY.json
     ├── pricing.example.json
     └── README.md
 ```
@@ -565,11 +566,14 @@ Ralph discovers `OPERATIONS.json` in this order:
 
 The file uses `rb-operational/v1`. Its commands are argument arrays rather than
 shell strings, and scenarios may select `linux`, `darwin`, and/or `win32`.
-Ralph copies the project to a temporary directory, excludes Git/run state and
-local `.env` variants, constructs a minimal environment, executes the
+Ralph copies the project to a temporary directory, excludes Git/run state,
+local `.env` variants, dependency directories, build products, and common
+caches, constructs a minimal environment, executes the
 applicable scenarios, terminates managed processes, and removes the copy.
-`cleanRoom.exclude` should additionally name the project's dependency trees,
-caches, build products, and local state.
+`cleanRoom.exclude` may name additional project-local state. A required
+dependency or generated artifact must be recreated by the declared scenario;
+it is never inherited merely because it happened to exist in the caller's
+checkout.
 
 Only scenarios applicable to the current host run locally. Native coverage for
 multiple claimed operating systems requires matching hosts/CI runners, an
@@ -591,11 +595,10 @@ local port. This is intentionally about observable products, not one stack:
 - jobs, workers, firmware, and data products prove their supported trigger and
   durable output.
 
-If no contract exists, the executor and manager derive the smallest honest
-scenario from README, specs, packaging metadata, tests, and actual entrypoints.
-They are explicitly forbidden from treating mocks or an existing running
-process as end-to-end evidence. A genuine visual/manual check is reported as
-manual unless suitable automation or observable evidence exists.
+If no contract exists, RBF is blocked rather than asking a model to invent an
+acceptance boundary. Add an explicit `rb-operational/v1` scenario tied to the
+documented consumer entrypoint. This prefers an observable need for authority
+over a convenient but unauthorized operational COMPLETE.
 
 Use the opt-out only deliberately, for example while debugging the runner:
 
@@ -680,6 +683,7 @@ RB_RALPH_AUDIT_STATUS: COMPLETE
 RB_RALPH_CRITERION: T001 | PASS | current source and canonical validation evidence
 RB_RALPH_CRITERION: AC-T001-01 | FAIL | consumer probe contradicts the criterion
 RB_RALPH_FINDING: AC-T001-01 | public consumer boundary | expected value | observed value | command/log provenance
+RB_RALPH_FINDING_RESOLUTION: F-P01-A001 | new canonical validation log and changed source boundary
 RB_RALPH_DECISION: RETRY
 RB_RALPH_REASON: Complete finding batch requires one repair cycle.
 ```
@@ -688,14 +692,17 @@ Every task and acceptance-criterion ID must appear exactly once with `PASS`,
 `FAIL`, `UNPROVEN`, `HUMAN_PENDING`, or `NOT_APPLICABLE`. Missing rows trigger a
 manager-only completion retry over the same executor evidence. `RETRY` requires
 a structured finding for every failed or unproven row. `COMPLETE` is accepted
-only when every row passes or is demonstrably not applicable. Every RETRY must
-repeat every still-observable structured finding. Omission closes an older
-finding only when the canonical evidence fingerprint changed; unchanged
-evidence cannot silently reinterpret a failure as success. Finding identities
+only when every declared row is `PASS`; the current execution contract has no
+typed applicability exemption, so `NOT_APPLICABLE` is rejected rather than used
+as a generic escape. Every RETRY must repeat every still-observable structured
+finding. An older finding closes only through a named
+`RB_RALPH_FINDING_RESOLUTION` against a new canonical evidence fingerprint;
+omission never closes it. Finding identities
 are derived from criteria, boundary, and expected behavior, while the latest
 observed failure and evidence remain current in the executor prompt. The
   explicit compatibility mode `--manager-audit legacy` accepts the older
-  two-line response.
+  decision/reason surface, but still rejects duplicate decisions and requires a
+  named finding resolution when a previous finding is open.
 
 If an orchestrator-owned gate converts a manager `COMPLETE` into `RETRY` (for
 example, a nonzero executor exit or deterministic validation failure), Ralph
@@ -708,16 +715,27 @@ manager decision cannot close findings from an orchestrator-rejected attempt.
 arguments, models, permissions, authentication, and output normalization, so
 the run manager does not hard-code Codex, Claude, or another provider.
 
-Built-in-provider executors are also asked to end a genuinely completed final
-response with `RB_RALPH_EXECUTOR_STATUS: COMPLETE`. Ralph consults this marker
-only when the provider exited zero and produced no workspace delta; absence is
-then treated as an incomplete provider turn rather than paid manager evidence.
-Custom adapters remain responsible for their own completion semantics.
+Every executor path has one completion interpretation. A clean exit with a
+product delta is a completed invocation (not accepted work); a clean no-delta
+turn must end with the terminal structured adapter result
+`RB_RALPH_EXECUTOR_RESULT: {"contract":"rb-ralph-executor-completion/v1","status":"completed"}`.
+Timeout, rate-limit, failure, and incomplete states are persisted separately.
+The legacy `RB_RALPH_EXECUTOR_STATUS` text is not a completion authority.
+Built-in and custom adapters use the same terminal structured-result contract.
 
-Ralph does not add secret-like files such as `.env`, private keys, or
-credential files to its changed-path summary. Custom adapters must avoid adding
-secrets to prompts or logs and apply equivalent redaction to any evidence they
-transport.
+Ralph records provenance for orchestrator-generated deterministic evidence,
+provider output/submissions, manager narrative, validation output, and
+operational verification output. Provider-submitted files remain untrusted
+after copy. Before canonical persistence Ralph deterministically redacts values
+it already knows: configured provider credentials, `RB_RALPH_EVIDENCE_ENV`,
+the selected memory token environment, and explicit/inherited operational
+environment values. It does not attempt heuristic secret detection; values it
+does not possess remain outside this boundary.
+
+`RB-RALPH-CONTRACT-IDENTITY.json` binds the installed runtime `VERSION` to the
+applicable consolidated-contract status. The current consolidated document is
+explicitly historical (`0.8.11`); `rb-manifest/v1`, `rb-execution/v1`, and
+`rb-operational/v1` remain independent authoritative data contracts.
 
 ## Built-in providers
 
@@ -1092,9 +1110,11 @@ are intentionally passed through without a hard-coded catalog, so new DeepSeek,
 MiniMax, Kimi, Anthropic, OpenAI, or local models become available as soon as
 the installed OpenCode provider exposes them.
 
-## Permission policy: YOLO by default
+## Permission policy: YOLO executor, protected manager
 
-Without a permission option, both executor and manager use YOLO mode:
+Without a permission option, the executor uses YOLO mode. G3 is always invoked
+with the protected role contract because a technical manager is an auditor, not
+a second executor:
 
 ```bash
 rb-ralph --project . --provider codex
@@ -1106,8 +1126,10 @@ For built-in Codex calls, YOLO passes
 `--dangerously-bypass-approvals-and-sandbox`. For built-in Claude calls, it
 passes `--permission-mode bypassPermissions` and
 `--dangerously-skip-permissions`. OpenCode receives `--auto` and an inline
-`permission: "allow"` override. This applies independently to executor and
-manager calls, including inherited or mixed providers.
+`permission: "allow"` override for the executor. Managers use Codex
+`read-only`, Claude `plan`, or OpenCode deny rules. Ralph also compares the
+complete product state before and after every manager call and rejects the
+review if a custom or misconfigured adapter mutates it.
 
 Protected execution must be requested explicitly:
 
@@ -1135,16 +1157,18 @@ Claude model inheritance follows the same rule.
 Claude effort may likewise be configured with `RB_RALPH_CLAUDE_AGENT_EFFORT`,
 `RB_RALPH_CLAUDE_MANAGER_EFFORT`, or `RB_RALPH_CLAUDE_EFFORT`.
 
-`RB_RALPH_PERMISSION_MODE=protected` is the environment equivalent. Existing
-provider-specific variables such as `RB_RALPH_CODEX_AGENT_SANDBOX` and
-`RB_RALPH_CLAUDE_MANAGER_PERMISSION_MODE` remain explicit lower-level
-overrides.
+`RB_RALPH_PERMISSION_MODE=protected` is the environment equivalent for the
+executor. Provider-specific executor variables such as
+`RB_RALPH_CODEX_AGENT_SANDBOX` remain explicit lower-level overrides. Manager
+permission overrides cannot select a write-capable mode: unsafe Codex or Claude
+manager values and custom OpenCode manager permissions fail explicitly.
 
 OpenCode, MiniMax, DeepSeek, and other CLIs connected through `--agent-cmd` or
 `--manager-cmd` receive `RB_RALPH_PERMISSION_MODE=yolo|protected` and
-`RB_RALPH_YOLO=1|0`. Their adapter must translate those values to the provider's
-native CLI flags. A custom adapter that cannot enforce `protected` must exit
-with a clear error instead of silently running unrestricted.
+`RB_RALPH_YOLO=1|0`. Manager commands always receive `protected` and `0`.
+Their adapter must translate those values to the provider's native CLI flags.
+A custom adapter that cannot enforce `protected` must exit with a clear error;
+the post-call product seal remains the deterministic fail-safe.
 
 Authentication for `codex`, `claude`, and `opencode` remains the responsibility
 of each installed CLI. Native API providers use the shared encrypted credential
@@ -1349,11 +1373,16 @@ path is outside the declared scopes, a scope is not machine-bounded, or changed
 path collection is incomplete, every unique command runs again. Each executed
 command has a 900-second timeout when GNU `timeout` is available:
 
+For the default `--execution-unit task`, the same existing `Scope` syntax is
+also the mechanical write boundary. Ralph captures a complete per-task state
+delta, rejects protected planning artifacts before considering Scope, and
+stops before G2/G3 when a task changes an unauthorized path.
+
 The next executor set is localized independently from validation: structured
-`FAIL`/`UNPROVEN` criteria map to their owning task, and a dependency is added
-only when the finding names its scope as a boundary that must change. Findings
-without a deterministic task mapping use an explicitly recorded conservative
-fallback instead of guessing.
+`FAIL`/`UNPROVEN` matrix rows map to their owning task. Free-form finding fields,
+including `boundary` and `expected`, remain diagnostic and cannot add tasks or
+paths to retry authority. Rows without a deterministic task mapping use an
+explicitly recorded conservative fallback instead of guessing.
 
 ```bash
 bin/rb-ralph --project . --provider codex \
@@ -1411,6 +1440,7 @@ bash tests/test-execution-parallelism.sh
 bash tests/test-agent-context.sh
 bash tests/test-context-efficiency.sh
 bash tests/test-validation-cache.sh
+bash tests/test-authority-enforcement.sh
 ```
 
 It covers real and symlink launchers, temporary installation, spaces in paths,

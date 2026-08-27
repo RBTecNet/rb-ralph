@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export RB_RALPH_CUSTOM_MANAGER_CAPABILITY=observational-v1
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RALPH="$ROOT/bin/rb-ralph"
@@ -71,6 +72,15 @@ new_git_project() {
   printf '%s\n' "$project"
 }
 
+authorize_shared_path() {
+  local project="$1" path="$2"
+  sed -i \
+    -e "s#\`src/a/\`, \`tests/a/\`#\`src/a/\`, \`tests/a/\`, \`$path\`#" \
+    -e "s#\`src/b/\`, \`tests/b/\`#\`src/b/\`, \`tests/b/\`, \`$path\`#" \
+    "$project/.rb/features/example/PHASES.md"
+  node "$CLI" manifest sync "$project" >/dev/null
+}
+
 MOCK_STATE="$TEMP_ROOT/mock-state"
 mkdir -p "$MOCK_STATE"
 export MOCK_STATE
@@ -92,12 +102,20 @@ fi
 mkdir -p src
 printf 'implemented by mock\n' > "src/rb-${RB_RALPH_PHASE_ID}.txt"
 printf 'mock agent complete\n'
+printf '%s\n' 'RB_RALPH_EXECUTOR_RESULT: {"contract":"rb-ralph-executor-completion/v1","status":"completed"}'
 MOCK_AGENT
 
 cat > "$TEMP_ROOT/mock-manager" <<'MOCK_MANAGER'
 #!/usr/bin/env bash
 set -euo pipefail
 cat > "$MOCK_STATE/manager-${RB_RALPH_PHASE_ID}-${RB_RALPH_ATTEMPT}.txt"
+# Codex' telemetry mode expects JSON events.  Keep the built-in-provider
+# fixture faithful so the canonical protocol parser sees one manager response,
+# not a prompt/transport echo.
+if [[ " $* " == *" --json "* ]]; then
+  printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"RB_RALPH_DECISION: COMPLETE\nRB_RALPH_REASON: built-in provider evidence accepted"}}'
+  exit 0
+fi
 case "${MOCK_MANAGER_SCENARIO:-complete}" in
   always-complete)
     printf '%s\n' 'RB_RALPH_DECISION: COMPLETE' 'RB_RALPH_REASON: optimistic approval'
@@ -109,7 +127,14 @@ case "${MOCK_MANAGER_SCENARIO:-complete}" in
     if [ "$RB_RALPH_ATTEMPT" -eq 1 ]; then
       printf '%s\n' 'RB_RALPH_DECISION: RETRY' 'RB_RALPH_REASON: focused validation failed'
     else
-      printf '%s\n' 'RB_RALPH_DECISION: COMPLETE' 'RB_RALPH_REASON: implementation and evidence accepted'
+      printf '%s\n' 'RB_RALPH_FINDING_RESOLUTION: F-P02-A001 | fresh implementation and validation evidence' 'RB_RALPH_DECISION: COMPLETE' 'RB_RALPH_REASON: implementation and evidence accepted'
+    fi
+    ;;
+  validation-retry)
+    if [ "$RB_RALPH_ATTEMPT" -eq 1 ]; then
+      printf '%s\n' 'RB_RALPH_DECISION: COMPLETE' 'RB_RALPH_REASON: optimistic approval before deterministic gate'
+    else
+      printf '%s\n' 'RB_RALPH_FINDING_RESOLUTION: F-P02-A001 | successful rerun of the canonical validation' 'RB_RALPH_DECISION: COMPLETE' 'RB_RALPH_REASON: implementation and validation accepted'
     fi
     ;;
   echoed-protocol)
@@ -121,7 +146,7 @@ case "${MOCK_MANAGER_SCENARIO:-complete}" in
     ;;
   *)
     if [ -f "src/rb-${RB_RALPH_PHASE_ID}.txt" ] || \
-      { [ -f "src/T002.txt" ] && [ -f "src/T003.txt" ]; }; then
+      { [ -f "src/a/T002.txt" ] && [ -f "src/b/T003.txt" ]; }; then
       printf '%s\n' 'RB_RALPH_DECISION: COMPLETE' 'RB_RALPH_REASON: implementation and evidence accepted'
     else
       printf '%s\n' 'RB_RALPH_DECISION: RETRY' 'RB_RALPH_REASON: implementation file is missing'
@@ -145,8 +170,10 @@ done
 started="$(find "$MOCK_STATE" -name 'started-T*' -type f | wc -l)"
 [ "$started" -ge 2 ] || exit 9
 touch "$MOCK_STATE/parallel-${RB_RALPH_TASK_ID}"
-mkdir -p src
-printf 'parallel implementation\n' > "src/${RB_RALPH_TASK_ID}.txt"
+case "$RB_RALPH_TASK_ID" in
+  T002) mkdir -p src/a; printf 'parallel implementation\n' > src/a/T002.txt ;;
+  T003) mkdir -p src/b; printf 'parallel implementation\n' > src/b/T003.txt ;;
+esac
 printf 'parallel task %s complete\n' "$RB_RALPH_TASK_ID"
 PARALLEL_AGENT
 chmod +x "$TEMP_ROOT/parallel-agent"
@@ -168,7 +195,12 @@ case "${ISOLATED_AGENT_SCENARIO:-disjoint}" in
       sed -i 's/right=base/right=T003/' src/shared-scope.txt
     fi
     ;;
-  *) printf 'implemented %s\n' "$RB_RALPH_TASK_ID" > "src/${RB_RALPH_TASK_ID}.txt" ;;
+  *)
+    case "$RB_RALPH_TASK_ID" in
+      T002) mkdir -p src/a; printf 'implemented %s\n' "$RB_RALPH_TASK_ID" > src/a/T002.txt ;;
+      T003) mkdir -p src/b; printf 'implemented %s\n' "$RB_RALPH_TASK_ID" > src/b/T003.txt ;;
+    esac
+    ;;
 esac
 ISOLATED_AGENT
 chmod +x "$TEMP_ROOT/isolated-agent"
@@ -220,7 +252,7 @@ assert_contains "$TEMP_ROOT/retry.out" "retry requested" "manager can request a 
 assert_eq "2" "$(cat "$MOCK_STATE/agent-count")" "retry invokes a fresh implementation attempt"
 RETRY_FINDINGS="$(find "$RETRY_PROJECT/.rb/runs" -name findings.tsv -type f -print -quit)"
 assert_contains "$RETRY_FINDINGS" $'F-P02-A001\tP02\t1\tresolved\tfocused validation failed\t' \
-  "manager findings remain structured until later evidence resolves them"
+  "manager findings close only through a named later resolution"
 awk -F '\t' '$1 == "F-P02-A001" && $6 != "" && $7 == "2" && $8 != "" { found=1 } END { exit(found ? 0 : 1) }' \
   "$RETRY_FINDINGS" || fail "finding resolution is not bound to opening and closing evidence fingerprints"
 ok "finding resolution is bound to opening and closing evidence fingerprints"
@@ -234,8 +266,11 @@ cat > "$TEMP_ROOT/fresh-task-agent" <<'FRESH_TASK_AGENT'
 set -euo pipefail
 cat > "$MOCK_STATE/fresh-task-${RB_RALPH_TASK_ID:?}.prompt"
 printf '%s\n' "$RB_RALPH_TASK_ID" >> "$MOCK_STATE/fresh-task-calls"
-mkdir -p src
-printf 'implemented\n' > "src/${RB_RALPH_TASK_ID}.txt"
+case "$RB_RALPH_TASK_ID" in
+  T002) mkdir -p src/a; printf 'implemented\n' > src/a/T002.txt ;;
+  T003) mkdir -p src/b; printf 'implemented\n' > src/b/T003.txt ;;
+esac
+printf '%s\n' 'RB_RALPH_EXECUTOR_RESULT: {"contract":"rb-ralph-executor-completion/v1","status":"completed"}'
 FRESH_TASK_AGENT
 cat > "$TEMP_ROOT/fresh-task-manager" <<'FRESH_TASK_MANAGER'
 #!/usr/bin/env bash
@@ -266,8 +301,10 @@ cat > "$TEMP_ROOT/localized-agent" <<'LOCALIZED_AGENT'
 set -euo pipefail
 cat > /dev/null
 printf '%s\t%s\n' "$RB_RALPH_ATTEMPT" "$RB_RALPH_TASK_ID" >> "$MOCK_STATE/localized-calls.tsv"
-mkdir -p src
-printf 'attempt=%s\n' "$RB_RALPH_ATTEMPT" > "src/${RB_RALPH_TASK_ID}.txt"
+case "$RB_RALPH_TASK_ID" in
+  T002) mkdir -p src/a; printf 'attempt=%s\n' "$RB_RALPH_ATTEMPT" > src/a/T002.txt ;;
+  T003) mkdir -p src/b; printf 'attempt=%s\n' "$RB_RALPH_ATTEMPT" > src/b/T003.txt ;;
+esac
 printf 'RB_RALPH_EXECUTOR_STATUS: COMPLETE\n'
 LOCALIZED_AGENT
 cat > "$TEMP_ROOT/localized-manager" <<'LOCALIZED_MANAGER'
@@ -290,6 +327,7 @@ else
     'RB_RALPH_CRITERION: AC-T002-01 | PASS | focused task outcome passes' \
     'RB_RALPH_CRITERION: T003 | PASS | sibling task remains proven' \
     'RB_RALPH_CRITERION: AC-T003-01 | PASS | sibling criterion remains proven' \
+    'RB_RALPH_FINDING_RESOLUTION: F-P02-A001 | focused repair in src/a/T002.txt' \
     'RB_RALPH_DECISION: COMPLETE' \
     'RB_RALPH_REASON: localized repair accepted'
 fi
@@ -404,6 +442,7 @@ elif [ "$count" -eq 3 ]; then
     'RB_RALPH_CRITERION: T001 | PASS | the task implementation boundary is now complete' \
     'RB_RALPH_CRITERION: AC-T001-01 | FAIL | version behavior remains unproven' \
     'RB_RALPH_FINDING: AC-T001-01 | consumer version boundary | exit zero and version 0.1.0 | second independent defect persists after repair | updated canonical consumer probe' \
+    'RB_RALPH_FINDING_RESOLUTION: F-P01-A001 | src/exhaustive.txt changed in attempt 2' \
     'RB_RALPH_DECISION: RETRY' \
     'RB_RALPH_REASON: one current finding remains after the first repair'
 else
@@ -411,6 +450,7 @@ else
     'RB_RALPH_AUDIT_STATUS: COMPLETE' \
     'RB_RALPH_CRITERION: T001 | PASS | current source and changed-path evidence' \
     'RB_RALPH_CRITERION: AC-T001-01 | PASS | canonical consumer probe passes' \
+    'RB_RALPH_FINDING_RESOLUTION: F-P01-A001-02 | canonical consumer probe at attempt 3' \
     'RB_RALPH_DECISION: COMPLETE' \
     'RB_RALPH_REASON: complete matrix accepted'
 fi
@@ -527,6 +567,7 @@ printf '%s\n' \
   'RB_RALPH_AUDIT_STATUS: COMPLETE' \
   'RB_RALPH_CRITERION: T001 | PASS | current source exists' \
   'RB_RALPH_CRITERION: AC-T001-01 | PASS | consumer evidence is present' \
+  'RB_RALPH_FINDING_RESOLUTION: F-P01-A001 | successful second executor attempt and canonical validation state' \
   'RB_RALPH_DECISION: COMPLETE' \
   'RB_RALPH_REASON: manager evidence is complete'
 OVERRIDE_MANAGER
@@ -561,9 +602,11 @@ assert_contains "$OVERRIDE_REPLAY_CUT/findings.tsv" $'\topen\timplementation age
 
 printf '0\n' > "$MOCK_STATE/agent-count"
 ECHOED_PROTOCOL_PROJECT="$(new_project echoed-protocol-project)"
-MOCK_MANAGER_SCENARIO=echoed-protocol "$RALPH" --project "$ECHOED_PROTOCOL_PROJECT" --validation-mode manager --agent-cmd "$TEMP_ROOT/mock-agent" --manager-cmd "$TEMP_ROOT/mock-manager" > "$TEMP_ROOT/echoed-protocol.out"
-assert_contains "$TEMP_ROOT/echoed-protocol.out" "P02 complete" "manager parser ignores an echoed protocol template"
-assert_eq "1" "$(cat "$MOCK_STATE/agent-count")" "echoed protocol does not consume a retry"
+if MOCK_MANAGER_SCENARIO=echoed-protocol "$RALPH" --project "$ECHOED_PROTOCOL_PROJECT" --validation-mode manager --manager-retries 0 --agent-cmd "$TEMP_ROOT/mock-agent" --manager-cmd "$TEMP_ROOT/mock-manager" > "$TEMP_ROOT/echoed-protocol.out" 2>&1; then
+  fail "contradictory manager decisions were accepted"
+fi
+assert_contains "$TEMP_ROOT/echoed-protocol.out" "invalid canonical manager audit" "manager parser rejects an echoed contradictory protocol"
+assert_eq "1" "$(cat "$MOCK_STATE/agent-count")" "contradictory manager output does not consume an executor retry"
 
 printf '0\n' > "$MOCK_STATE/agent-count"
 printf '0\n' > "$MOCK_STATE/validation-count"
@@ -583,7 +626,7 @@ printf 'focused validation passed\n'
 VALIDATE
 chmod +x "$VALIDATION_PROJECT/validate.sh"
 node "$CLI" manifest sync "$VALIDATION_PROJECT" >/dev/null
-"$RALPH" --project "$VALIDATION_PROJECT" --agent-cmd "$TEMP_ROOT/mock-agent" --manager-cmd "$TEMP_ROOT/mock-manager" > "$TEMP_ROOT/validation.out"
+MOCK_MANAGER_SCENARIO=validation-retry "$RALPH" --project "$VALIDATION_PROJECT" --agent-cmd "$TEMP_ROOT/mock-agent" --manager-cmd "$TEMP_ROOT/mock-manager" > "$TEMP_ROOT/validation.out"
 assert_contains "$TEMP_ROOT/validation.out" "deterministic validation failed" "failed command overrides an optimistic manager"
 assert_eq "2" "$(cat "$MOCK_STATE/agent-count")" "deterministic failure triggers another agent attempt"
 assert_contains "$MOCK_STATE/agent-P02-2.txt" "PREVIOUS_MANAGER_FEEDBACK" "retry prompt carries evidence from prior attempt"
@@ -649,7 +692,7 @@ ISOLATED_PROJECT="$(new_git_project isolated-project)"
   --agent-cmd "$TEMP_ROOT/isolated-agent" --manager-cmd "$TEMP_ROOT/mock-manager" > "$TEMP_ROOT/isolated.out"
 assert_contains "$TEMP_ROOT/isolated.out" "isolation snapshot=" "worktree mode creates an immutable execution snapshot"
 assert_contains "$TEMP_ROOT/isolated.out" "isolated task patches integrated" "isolated patches pass integration before main tree application"
-[ -f "$ISOLATED_PROJECT/src/T002.txt" ] && [ -f "$ISOLATED_PROJECT/src/T003.txt" ] || fail "isolated task patches were not applied"
+[ -f "$ISOLATED_PROJECT/src/a/T002.txt" ] && [ -f "$ISOLATED_PROJECT/src/b/T003.txt" ] || fail "isolated task patches were not applied"
 ok "disjoint task patches are applied to the primary working tree"
 assert_eq "local-change" "$(cat "$ISOLATED_PROJECT/base.txt")" "tracked local changes survive snapshot and integration"
 assert_eq "untracked-context" "$(cat "$ISOLATED_PROJECT/local.txt")" "untracked local context survives snapshot and integration"
@@ -660,6 +703,7 @@ WORKTREE_COUNT="$(git -C "$ISOLATED_PROJECT" worktree list --porcelain | grep -c
 assert_eq "1" "$WORKTREE_COUNT" "temporary worktrees are removed after integration"
 
 CONFLICT_PROJECT="$(new_git_project conflict-project)"
+authorize_shared_path "$CONFLICT_PROJECT" "src/shared.txt"
 if ISOLATED_AGENT_SCENARIO=conflict MOCK_MANAGER_SCENARIO=always-complete \
   "$RALPH" --project "$CONFLICT_PROJECT" \
   --validation-mode manager --parallel 2 --isolation worktree --max-attempts 1 --max-total-attempts 1 \
@@ -677,6 +721,7 @@ CONFLICT_WORKTREES="$(git -C "$CONFLICT_PROJECT" worktree list --porcelain | gre
 assert_eq "1" "$CONFLICT_WORKTREES" "temporary worktrees are cleaned after integration conflict"
 
 OVERLAP_PROJECT="$(new_git_project overlap-project)"
+authorize_shared_path "$OVERLAP_PROJECT" "src/shared-scope.txt"
 if ISOLATED_AGENT_SCENARIO=overlap MOCK_MANAGER_SCENARIO=always-complete \
   "$RALPH" --project "$OVERLAP_PROJECT" \
   --validation-mode manager --parallel 2 --isolation worktree --max-attempts 1 --max-total-attempts 1 \
@@ -727,8 +772,10 @@ if [ "$RB_RALPH_TASK_ID" = "T003" ] && [ "$count" -eq 1 ]; then
   printf '%s\n' 'RB_RALPH_PROVIDER_STATUS: RATE_LIMIT' 'RB_RALPH_RETRY_AFTER: 0'
   exit 75
 fi
-mkdir -p src
-printf 'implemented by task retry\n' > "src/${RB_RALPH_TASK_ID}.txt"
+case "$RB_RALPH_TASK_ID" in
+  T002) mkdir -p src/a; printf 'implemented by task retry\n' > src/a/T002.txt ;;
+  T003) mkdir -p src/b; printf 'implemented by task retry\n' > src/b/T003.txt ;;
+esac
 if [ "$RB_RALPH_TASK_ID" = "T002" ]; then
   printf '%s\n' 'RB_RALPH_PROVIDER_STATUS: RATE_LIMIT'
 else
